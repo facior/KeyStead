@@ -1,0 +1,1448 @@
+"""
+Widoki montowane wewnątrz wysuwanego panelu bocznego (Sliding Drawer Views).
+Zastępują tradycyjne okna dialogowe:
+- Formularz Wpisu (Dodawanie / Edycja)
+- Generator Haseł i Passphrase
+- Centrum Audytu Bezpieczeństwa (Watchtower & HIBP)
+- Centrum Kopii Zapasowych i Chmury
+- Kreator Importu
+- Ustawienia Sejfu
+"""
+
+import copy
+import hmac
+import os
+import threading
+from datetime import datetime
+from typing import Optional, Callable, Dict, Any, List
+import customtkinter as ctk
+from tkinter import filedialog, messagebox
+
+from core.vault import Vault, VaultEntry
+from core.generator import generate_password, generate_passphrase, evaluate_password_strength, check_master_password
+from core.totp_service import parse_otpauth_uri, sanitize_secret
+from core.security_audit import check_password_breach_hibp, run_vault_audit, AuditReport
+from core.storage import save_vault
+from backups import BackupManager, vault_snapshot, merge_runtime_state, oauth
+from importers import (
+    get_available_importers, detect_importer, run_import, apply_import,
+    is_plaintext_export, secure_delete_file,
+    STRATEGY_SKIP, STRATEGY_ADD_ALL, STRATEGY_UPDATE
+)
+from ui.theme import (
+    FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_CODE, FONT_SMALL,
+    COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT, COLOR_CARD_DARK, COLOR_CARD_HOVER,
+    COLOR_PANEL_DARK, COLOR_BORDER, COLOR_SUCCESS, COLOR_DANGER, COLOR_WARNING,
+    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, COLOR_TEXT_ACCENT
+)
+from ui.clipboard import SecureClipboard
+from ui.policy import (SCORE_LABELS, clipboard_choices, effective_auto_lock, effective_clipboard, lock_choices,
+                       min_master_score)
+
+
+def run_in_background(widget, work: Callable[[], Any], on_done: Callable[[Any], None]) -> None:
+    """Wykonuje `work` w wątku roboczym i przekazuje wynik do `on_done` w wątku UI (jeśli widget nadal istnieje)."""
+    def _worker():
+        try:
+            result = work()
+        except Exception as e:  # Błąd zwracamy do UI zamiast gubić go w wątku
+            result = e
+        try:
+            widget.after(0, lambda: widget.winfo_exists() and on_done(result))
+        except Exception:
+            pass  # Widget zniszczony (zamknięty panel / blokada sejfu)
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+# =====================================================================
+# 1. FORMULARZ WPISU (ENTRY DRAWER VIEW)
+# =====================================================================
+class EntryDrawerView(ctk.CTkFrame):
+    def __init__(
+        self,
+        parent,
+        categories: List[str],
+        entry: Optional[VaultEntry] = None,
+        on_save: Optional[Callable[[VaultEntry], None]] = None,
+        on_cancel: Optional[Callable[[], None]] = None,
+        on_open_generator: Optional[Callable[[], None]] = None
+    ):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.categories = categories
+        self.entry = entry
+        self.on_save = on_save
+        self.on_cancel = on_cancel
+        self.on_open_generator = on_open_generator
+
+        self._password_hidden = True
+        self._custom_field_widgets: List[Dict[str, Any]] = []
+
+        self._build_ui()
+        if entry:
+            self._populate(entry)
+
+    def _build_ui(self):
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True, padx=5, pady=(0, 10))
+
+        # Tytuł
+        ctk.CTkLabel(self.scroll, text="Tytuł / Nazwa usługi *", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.title_entry = ctk.CTkEntry(self.scroll, placeholder_text="np. Google, GitHub, Bank...")
+        self.title_entry.pack(fill="x", pady=(0, 10))
+
+        # Kategoria i Ulubione
+        cat_fav = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        cat_fav.pack(fill="x", pady=(0, 10))
+
+        c_col = ctk.CTkFrame(cat_fav, fg_color="transparent")
+        c_col.pack(side="left", expand=True, fill="x", padx=(0, 10))
+        ctk.CTkLabel(c_col, text="Kategoria:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 2))
+        available_cats = [c for c in self.categories if c != "Wszystkie"]
+        self.cat_combo = ctk.CTkComboBox(c_col, values=available_cats)
+        self.cat_combo.set(available_cats[0] if available_cats else "Loginy")
+        self.cat_combo.pack(fill="x")
+
+        f_col = ctk.CTkFrame(cat_fav, fg_color="transparent")
+        f_col.pack(side="right", padx=(10, 0), pady=(18, 0))
+        self.fav_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(f_col, text="⭐ Ulubione", variable=self.fav_var).pack()
+
+        # Login
+        ctk.CTkLabel(self.scroll, text="Login / E-mail / Nazwa użytkownika", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.user_entry = ctk.CTkEntry(self.scroll, placeholder_text="jan.kowalski@example.com")
+        self.user_entry.pack(fill="x", pady=(0, 10))
+
+        # Hasło
+        ctk.CTkLabel(self.scroll, text="Hasło", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        pwd_box = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        pwd_box.pack(fill="x", pady=(0, 2))
+
+        self.pwd_entry = ctk.CTkEntry(pwd_box, show="•", placeholder_text="Wpisz hasło lub wygeneruj...")
+        self.pwd_entry.pack(side="left", expand=True, fill="x", padx=(0, 5))
+        self.pwd_entry.bind("<KeyRelease>", self._on_password_typed)
+
+        self.eye_btn = ctk.CTkButton(pwd_box, text="👁", width=36, fg_color=COLOR_CARD_DARK, command=self._toggle_eye)
+        self.eye_btn.pack(side="left", padx=(0, 5))
+
+        ctk.CTkButton(pwd_box, text="⚡ Generuj", width=80, fg_color=COLOR_PRIMARY, command=self._generate_inline_pwd).pack(side="left")
+
+        # Pasek siły hasła
+        self.strength_bar = ctk.CTkProgressBar(self.scroll, height=5)
+        self.strength_bar.pack(fill="x", pady=(4, 2))
+        self.strength_bar.set(0)
+
+        # Wiersz wskaźnika siły i weryfikacji HIBP
+        s_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        s_row.pack(fill="x", pady=(0, 10))
+
+        self.strength_lbl = ctk.CTkLabel(s_row, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
+        self.strength_lbl.pack(side="left")
+
+        self.hibp_btn = ctk.CTkButton(
+            s_row,
+            text="Sprawdź w wyciekach (HIBP)",
+            width=165,
+            height=20,
+            font=FONT_SMALL,
+            fg_color=COLOR_CARD_DARK,
+            command=self._check_hibp
+        )
+        self.hibp_btn.pack(side="right")
+
+        # URL
+        ctk.CTkLabel(self.scroll, text="Adres URL (Strona logowania)", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.url_entry = ctk.CTkEntry(self.scroll, placeholder_text="https://...")
+        self.url_entry.pack(fill="x", pady=(0, 10))
+
+        # TOTP 2FA
+        ctk.CTkLabel(self.scroll, text="Klucz TOTP (2FA) - Base32 lub link otpauth://", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.totp_entry = ctk.CTkEntry(self.scroll, placeholder_text="JBSWY3DPEHPK3PXP...")
+        self.totp_entry.pack(fill="x", pady=(0, 10))
+
+        # Notatki
+        ctk.CTkLabel(self.scroll, text="Bezpieczne notatki", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.notes_box = ctk.CTkTextbox(self.scroll, height=75)
+        self.notes_box.pack(fill="x", pady=(0, 10))
+
+        # Tagi
+        ctk.CTkLabel(self.scroll, text="Tagi (oddzielone przecinkami)", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.tags_entry = ctk.CTkEntry(self.scroll, placeholder_text="praca, finanse, vpn...")
+        self.tags_entry.pack(fill="x", pady=(0, 12))
+
+        # Pola dodatkowe
+        c_head = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        c_head.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(c_head, text="Pola niestandardowe (PIN, Pytania, Klucze)", font=FONT_BODY_BOLD).pack(side="left")
+        ctk.CTkButton(c_head, text="+ Dodaj pole", width=90, height=24, fg_color=COLOR_CARD_DARK, command=self._add_field_row).pack(side="right")
+
+        self.custom_fields_box = ctk.CTkFrame(self.scroll, fg_color=COLOR_CARD_DARK, corner_radius=8)
+        self.custom_fields_box.pack(fill="x", pady=(0, 15))
+
+        # Przyciski na dole
+        action_bar = ctk.CTkFrame(self, fg_color=COLOR_CARD_DARK, corner_radius=8, height=50)
+        action_bar.pack(fill="x", side="bottom", pady=(5, 0))
+
+        if self.on_cancel:
+            ctk.CTkButton(action_bar, text="Anuluj", fg_color=COLOR_PANEL_DARK, command=self.on_cancel).pack(side="left", padx=10, pady=8)
+
+        ctk.CTkButton(
+            action_bar,
+            text="💾 Zapisz wpis",
+            fg_color=COLOR_PRIMARY,
+            hover_color=COLOR_PRIMARY_HOVER,
+            command=self._save_entry
+        ).pack(side="right", padx=10, pady=8)
+
+    def _toggle_eye(self):
+        if self._password_hidden:
+            self.pwd_entry.configure(show="")
+            self.eye_btn.configure(text="🔒")
+            self._password_hidden = False
+        else:
+            self.pwd_entry.configure(show="•")
+            self.eye_btn.configure(text="👁")
+            self._password_hidden = True
+
+    def _generate_inline_pwd(self):
+        new_pwd = generate_password(length=20, avoid_ambiguous=True)
+        self.pwd_entry.delete(0, "end")
+        self.pwd_entry.insert(0, new_pwd)
+        self._on_password_typed()
+
+    def _on_password_typed(self, event=None):
+        pwd = self.pwd_entry.get()
+        if not pwd:
+            self.strength_bar.set(0)
+            self.strength_lbl.configure(text="")
+            return
+        eval_res = evaluate_password_strength(pwd)
+        self.strength_bar.set(eval_res["score"] / 4.0)
+        self.strength_bar.configure(progress_color=eval_res["color"])
+        self.strength_lbl.configure(text=f"{eval_res['label']} ({eval_res['entropy']} bitów)", text_color=eval_res["color"])
+        self.hibp_btn.configure(text="Sprawdź w wyciekach (HIBP)", fg_color=COLOR_CARD_DARK)
+
+    def _check_hibp(self):
+        pwd = self.pwd_entry.get()
+        if not pwd:
+            return
+        self.hibp_btn.configure(text="Sprawdzanie...", state="disabled")
+
+        def _ui(res):
+            is_pwned, cnt = res
+            self.hibp_btn.configure(state="normal")
+            if is_pwned:
+                self.hibp_btn.configure(text=f"🚨 Wyciekło ({cnt:,}x)!", fg_color=COLOR_DANGER)
+            elif cnt < 0:
+                self.hibp_btn.configure(text="⚠️ Brak połączenia z HIBP", fg_color=COLOR_WARNING)
+            else:
+                self.hibp_btn.configure(text="✅ Bezpieczne (0x)", fg_color=COLOR_SUCCESS)
+
+        run_in_background(self, lambda: check_password_breach_hibp(pwd), _ui)
+
+    def _add_field_row(self, k: str = "", v: str = ""):
+        row = ctk.CTkFrame(self.custom_fields_box, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=4)
+
+        ke = ctk.CTkEntry(row, placeholder_text="Pole (np. PIN)")
+        ke.insert(0, k)
+        ke.pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+        ve = ctk.CTkEntry(row, placeholder_text="Wartość")
+        ve.insert(0, v)
+        ve.pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+        item_dict = {"frame": row, "key": ke, "val": ve}
+        def _rem():
+            row.destroy()
+            if item_dict in self._custom_field_widgets:
+                self._custom_field_widgets.remove(item_dict)
+
+        ctk.CTkButton(row, text="✕", width=26, height=26, fg_color=COLOR_DANGER, command=_rem).pack(side="left")
+        self._custom_field_widgets.append(item_dict)
+
+    def _populate(self, entry: VaultEntry):
+        self.title_entry.insert(0, entry.title)
+        values = list(self.cat_combo.cget("values"))
+        if entry.category and entry.category not in values:
+            # Kategoria spoza listy (np. z importu) – nie zmieniaj jej po cichu przy edycji
+            values.append(entry.category)
+            self.cat_combo.configure(values=values)
+        self.cat_combo.set(entry.category or "Loginy")
+        self.fav_var.set(entry.favorite)
+        self.user_entry.insert(0, entry.username)
+        self.pwd_entry.insert(0, entry.password)
+        self.url_entry.insert(0, entry.url)
+        self.totp_entry.insert(0, entry.totp_secret)
+        self.notes_box.insert("1.0", entry.notes)
+        self.tags_entry.insert(0, ", ".join(entry.tags))
+
+        for k, v in entry.custom_fields.items():
+            self._add_field_row(k, v)
+        self._on_password_typed()
+
+    def _save_entry(self):
+        title = self.title_entry.get().strip()
+        if not title:
+            self.title_entry.focus()
+            return
+
+        cat = self.cat_combo.get().strip() or "Loginy"
+        u = self.user_entry.get().strip()
+        p = self.pwd_entry.get()
+        url = self.url_entry.get().strip()
+        raw_totp = self.totp_entry.get().strip()
+
+        totp = ""
+        if raw_totp.startswith("otpauth://"):
+            parsed = parse_otpauth_uri(raw_totp)
+            totp = parsed[0] if parsed else raw_totp
+        else:
+            totp = sanitize_secret(raw_totp)
+
+        notes = self.notes_box.get("1.0", "end-1c").strip()
+        tags = [t.strip() for t in self.tags_entry.get().split(",") if t.strip()]
+
+        cfields = {}
+        for w in self._custom_field_widgets:
+            k = w["key"].get().strip()
+            v = w["val"].get().strip()
+            if k:
+                cfields[k] = v
+
+        if self.entry:
+            self.entry.update(
+                title=title, category=cat, username=u, password=p,
+                url=url, totp_secret=totp, notes=notes, tags=tags,
+                custom_fields=cfields, favorite=self.fav_var.get()
+            )
+            saved = self.entry
+        else:
+            saved = VaultEntry(
+                title=title, category=cat, username=u, password=p,
+                url=url, totp_secret=totp, notes=notes, tags=tags,
+                custom_fields=cfields, favorite=self.fav_var.get()
+            )
+
+        if self.on_save:
+            self.on_save(saved)
+
+
+# =====================================================================
+# 2. GENERATOR HASEŁ (GENERATOR DRAWER VIEW)
+# =====================================================================
+class GeneratorDrawerView(ctk.CTkFrame):
+    def __init__(self, parent, on_use_password: Optional[Callable[[str], None]] = None):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.on_use_password = on_use_password
+        self._mode = "random"
+
+        self._build_ui()
+        self._regenerate()
+
+    def _build_ui(self):
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # Pole wygenerowanego hasła
+        out_frame = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        out_frame.pack(fill="x", pady=(0, 15), ipady=6)
+
+        self.pwd_entry = ctk.CTkEntry(out_frame, font=("Consolas", 15, "bold"), justify="center", fg_color="transparent", border_width=0)
+        self.pwd_entry.pack(fill="x", padx=10, pady=(6, 4))
+
+        self.s_bar = ctk.CTkProgressBar(out_frame, height=6)
+        self.s_bar.pack(fill="x", padx=12, pady=(0, 4))
+
+        self.s_lbl = ctk.CTkLabel(out_frame, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
+        self.s_lbl.pack(pady=(0, 6))
+
+        # Przyciski Kopiuj / Nowe / Użyj
+        btn_box = ctk.CTkFrame(scroll, fg_color="transparent")
+        btn_box.pack(fill="x", pady=(0, 15))
+
+        self.copy_btn = ctk.CTkButton(btn_box, text="Kopiuj do schowka", fg_color=COLOR_PRIMARY, command=self._copy)
+        self.copy_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+        ctk.CTkButton(btn_box, text="🔄 Nowe", width=75, fg_color=COLOR_CARD_DARK, command=self._regenerate).pack(side="left", padx=4)
+
+        if self.on_use_password:
+            ctk.CTkButton(btn_box, text="Wstaw do wpisu", fg_color=COLOR_SUCCESS, command=lambda: self.on_use_password(self.pwd_entry.get())).pack(side="left", padx=(4, 0))
+
+        # Przełącznik trybu
+        self.mode_btn = ctk.CTkSegmentedButton(scroll, values=["Losowe hasło", "Fraza (Passphrase)"], command=self._mode_change)
+        self.mode_btn.set("Losowe hasło")
+        self.mode_btn.pack(fill="x", pady=(0, 15))
+
+        # Opcje
+        self.opts_box = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        self.opts_box.pack(fill="x", ipady=8, padx=2)
+
+        # Długość
+        lh = ctk.CTkFrame(self.opts_box, fg_color="transparent")
+        lh.pack(fill="x", padx=15, pady=(8, 2))
+        ctk.CTkLabel(lh, text="Długość hasła:", font=FONT_BODY_BOLD).pack(side="left")
+        self.len_lbl = ctk.CTkLabel(lh, text="20", font=FONT_BODY_BOLD, text_color=COLOR_PRIMARY_LIGHT)
+        self.len_lbl.pack(side="right")
+
+        self.len_slider = ctk.CTkSlider(self.opts_box, from_=8, to=64, number_of_steps=56, command=self._on_slider)
+        self.len_slider.set(20)
+        self.len_slider.pack(fill="x", padx=15, pady=(0, 12))
+
+        # Checkboxy
+        self.c_up = ctk.BooleanVar(value=True)
+        self.c_lo = ctk.BooleanVar(value=True)
+        self.c_dg = ctk.BooleanVar(value=True)
+        self.c_sy = ctk.BooleanVar(value=True)
+        self.c_am = ctk.BooleanVar(value=True)
+
+        ctk.CTkCheckBox(self.opts_box, text="Wielkie litery (A-Z)", variable=self.c_up, command=self._regenerate).pack(anchor="w", padx=15, pady=3)
+        ctk.CTkCheckBox(self.opts_box, text="Małe litery (a-z)", variable=self.c_lo, command=self._regenerate).pack(anchor="w", padx=15, pady=3)
+        ctk.CTkCheckBox(self.opts_box, text="Cyfry (0-9)", variable=self.c_dg, command=self._regenerate).pack(anchor="w", padx=15, pady=3)
+        ctk.CTkCheckBox(self.opts_box, text="Znaki specjalne (!@#$%^&*)", variable=self.c_sy, command=self._regenerate).pack(anchor="w", padx=15, pady=3)
+        ctk.CTkCheckBox(self.opts_box, text="Unikaj mylących znaków (0, O, 1, l, I)", variable=self.c_am, command=self._regenerate).pack(anchor="w", padx=15, pady=3)
+
+    def _mode_change(self, v):
+        self._mode = "random" if "Losowe" in v else "passphrase"
+        self._regenerate()
+
+    def _on_slider(self, val):
+        self.len_lbl.configure(text=str(int(val)))
+        self._regenerate()
+
+    def _regenerate(self):
+        if self._mode == "random":
+            pwd = generate_password(
+                length=int(self.len_slider.get()),
+                use_upper=self.c_up.get(), use_lower=self.c_lo.get(),
+                use_digits=self.c_dg.get(), use_symbols=self.c_sy.get(),
+                avoid_ambiguous=self.c_am.get()
+            )
+        else:
+            pwd = generate_passphrase(word_count=5, separator="-", capitalize=True, include_number=True)
+
+        self.pwd_entry.delete(0, "end")
+        self.pwd_entry.insert(0, pwd)
+
+        eval_res = evaluate_password_strength(pwd)
+        self.s_bar.set(eval_res["score"] / 4.0)
+        self.s_bar.configure(progress_color=eval_res["color"])
+        self.s_lbl.configure(text=f"{eval_res['label']} ({eval_res['entropy']} bitów entropii)", text_color=eval_res["color"])
+
+    def _copy(self):
+        pwd = self.pwd_entry.get()
+        if pwd:
+            SecureClipboard.copy(pwd, timeout_seconds=30)
+            self.copy_btn.configure(text="Skopiowano! (30s)", fg_color=COLOR_SUCCESS)
+            self.after(2000, lambda: self.copy_btn.configure(text="Kopiuj do schowka", fg_color=COLOR_PRIMARY))
+
+
+# =====================================================================
+# 3. CENTRUM AUDYTU BEZPIECZEŃSTWA (AUDIT DRAWER VIEW)
+# =====================================================================
+class AuditDrawerView(ctk.CTkFrame):
+    def __init__(self, parent, vault: Vault, on_fix_entry: Optional[Callable[[str], None]] = None,
+                 on_report: Optional[Callable[[AuditReport], None]] = None):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.vault = vault
+        self.on_fix_entry = on_fix_entry
+        self.on_report = on_report  # tryb serwerowy: zbiorczy wynik trafia do raportu firmy
+        self._report: Optional[AuditReport] = None
+
+        self._build_ui()
+        self._start_audit()
+
+    def _build_ui(self):
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True)
+
+        # Karta wyniku
+        self.score_card = ctk.CTkFrame(self.scroll, fg_color=COLOR_CARD_DARK, corner_radius=12)
+        self.score_card.pack(fill="x", pady=(0, 15), ipady=6)
+
+        inner = ctk.CTkFrame(self.score_card, fg_color="transparent")
+        inner.pack(fill="x", padx=15, pady=8)
+
+        self.score_lbl = ctk.CTkLabel(inner, text="--", font=("Segoe UI", 32, "bold"), text_color=COLOR_SUCCESS)
+        self.score_lbl.pack(side="left", padx=(0, 12))
+
+        col = ctk.CTkFrame(inner, fg_color="transparent")
+        col.pack(side="left", fill="x", expand=True)
+
+        self.score_title = ctk.CTkLabel(col, text="Trwa skanowanie sejfu...", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w")
+        self.score_title.pack(anchor="w")
+
+        self.score_desc = ctk.CTkLabel(col, text="Weryfikacja wycieków Have I Been Pwned metodą k-Anonymity...", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w")
+        self.score_desc.pack(anchor="w")
+
+        self.scan_bar = ctk.CTkProgressBar(self.scroll, height=5)
+        self.scan_bar.pack(fill="x", pady=(0, 12))
+        self.scan_bar.set(0)
+
+        # Kontener na listę uwag
+        ctk.CTkLabel(self.scroll, text="Wykryte uwagi bezpieczeństwa:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 6))
+        self.issues_container = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.issues_container.pack(fill="both", expand=True)
+
+    def _start_audit(self):
+        self.scan_bar.set(0)
+
+        def _progress(done: int, total: int, title: str):
+            try:
+                self.after(0, lambda: self.scan_bar.winfo_exists() and self.scan_bar.set(done / max(total, 1)))
+            except Exception:
+                pass
+
+        run_in_background(self, lambda: run_vault_audit(self.vault, check_hibp=True, progress_callback=_progress), self._on_done)
+
+    def _on_done(self, report):
+        if isinstance(report, Exception):
+            self.score_title.configure(text="Audyt nie powiódł się")
+            self.score_desc.configure(text=str(report))
+            return
+        self._report = report
+        if self.on_report:
+            self.on_report(report)
+        self.scan_bar.set(1.0)
+        self.score_lbl.configure(text=f"{report.score}/100", text_color=report.rating_color)
+        self.score_title.configure(text=f"Stan sejfu: {report.rating_label}")
+        desc = f"Przeanalizowano {report.total_entries} wpisów. Wykryto {len(report.issues)} uwag."
+        if report.hibp_failures:
+            desc += f"\n⚠️ Nie udało się sprawdzić {report.hibp_failures} haseł w HIBP (brak połączenia?)."
+        self.score_desc.configure(text=desc, justify="left")
+
+        for w in self.issues_container.winfo_children():
+            w.destroy()
+
+        if not report.issues:
+            card = ctk.CTkFrame(self.issues_container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            card.pack(fill="x", pady=20, ipady=20)
+            if report.total_entries == 0:
+                ctk.CTkLabel(card, text="Sejf jest pusty – dodaj wpisy, aby przeprowadzić audyt.", font=FONT_SUBTITLE, text_color=COLOR_TEXT_MUTED).pack(pady=4)
+                return
+            ctk.CTkLabel(card, text="🎉", font=("Segoe UI", 36)).pack()
+            ctk.CTkLabel(card, text="Brak zagrożeń w Twoim sejfie!", font=FONT_SUBTITLE, text_color=COLOR_SUCCESS).pack(pady=4)
+            ctk.CTkLabel(card, text="Wszystkie hasła są silne, unikalne i bezpieczne.", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack()
+            return
+
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        for issue in sorted(report.issues, key=lambda i: severity_order.get(i.severity, 9)):
+            card = ctk.CTkFrame(self.issues_container, fg_color=COLOR_CARD_DARK, corner_radius=8)
+            card.pack(fill="x", pady=4)
+
+            row = ctk.CTkFrame(card, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=10)
+
+            col = ctk.CTkFrame(row, fg_color="transparent")
+            col.pack(side="left", fill="x", expand=True)
+
+            sev_color = COLOR_DANGER if issue.severity == "critical" else (COLOR_WARNING if issue.severity == "high" else COLOR_PRIMARY_LIGHT)
+            ctk.CTkLabel(col, text=f"{issue.entry_title} — {issue.title}", font=FONT_BODY_BOLD, text_color=sev_color, anchor="w").pack(anchor="w")
+            ctk.CTkLabel(col, text=issue.description, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w", wraplength=340, justify="left").pack(anchor="w")
+
+            if self.on_fix_entry:
+                ctk.CTkButton(
+                    row,
+                    text="Napraw 🔧",
+                    width=85,
+                    height=28,
+                    fg_color=COLOR_PANEL_DARK,
+                    hover_color=COLOR_CARD_HOVER,
+                    command=lambda eid=issue.entry_id: self.on_fix_entry(eid)
+                ).pack(side="right", padx=(8, 0))
+
+
+# =====================================================================
+# 4. CENTRUM KOPII ZAPASOWYCH I CHMURY (BACKUP DRAWER VIEW)
+# =====================================================================
+class BackupDrawerView(ctk.CTkFrame):
+    # (klucz, nagłówek, tekst przycisku logowania, podpowiedź folderu synchronizacji)
+    CLOUDS = [
+        ("onedrive", "☁️ Microsoft OneDrive", "Zaloguj przez Microsoft", "np. C:\\Users\\...\\OneDrive"),
+        ("google_drive", "🟢 Dysk Google", "Zaloguj przez Google", "np. G:\\Mój dysk"),
+        ("dropbox", "📦 Dropbox", "Zaloguj przez Dropbox", "np. C:\\Users\\...\\Dropbox"),
+    ]
+
+    def __init__(self, parent, vault: Vault, vault_file_path: str, on_saved: Optional[Callable[[], None]] = None):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.vault = vault
+        self.vault_file_path = vault_file_path
+        self.on_saved = on_saved
+        self.mgr = BackupManager()
+        self._action_buttons: List[ctk.CTkButton] = []
+        self._cloud: Dict[str, Dict[str, Any]] = {}
+
+        self._build_ui()
+        self._load()
+
+    # ------------------------------------------------------------- budowa UI
+    def _dest(self) -> Dict[str, Any]:
+        return self.vault.settings.setdefault("backup_destinations", {})
+
+    def _action_button(self, parent, **kwargs) -> ctk.CTkButton:
+        btn = ctk.CTkButton(parent, **kwargs)
+        self._action_buttons.append(btn)
+        return btn
+
+    def _build_ui(self):
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        self.auto_b_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(scroll, text="Automatyczny backup przy każdym zapisie sejfu", variable=self.auto_b_var, font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 15))
+
+        # Kopia lokalna / USB
+        c1 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        c1.pack(fill="x", pady=6, ipady=6)
+        ctk.CTkLabel(c1, text="💾 Kopia lokalna / Nośnik USB", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 2))
+        r1 = ctk.CTkFrame(c1, fg_color="transparent")
+        r1.pack(fill="x", padx=15, pady=4)
+        self.local_dir_e = ctk.CTkEntry(r1, placeholder_text="Ścieżka do katalogu na kopie...")
+        self.local_dir_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(r1, text="Wybierz...", width=80, fg_color=COLOR_PANEL_DARK, command=lambda: self._browse_into(self.local_dir_e, "Katalog kopii lokalnej")).pack(side="left")
+        b1 = ctk.CTkFrame(c1, fg_color="transparent")
+        b1.pack(fill="x", padx=15, pady=(4, 8))
+        self._action_button(b1, text="Utwórz kopię teraz", fg_color=COLOR_PRIMARY, command=lambda: self._run_backup("local")).pack(side="left")
+
+        # Chmury z logowaniem w przeglądarce
+        for key, title, login_text, folder_hint in self.CLOUDS:
+            self._build_cloud_card(scroll, key, title, login_text, folder_hint)
+
+        # WebDAV
+        c2 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        c2.pack(fill="x", pady=6, ipady=6)
+        ctk.CTkLabel(c2, text="🌐 WebDAV (Nextcloud / ownCloud / Synology)", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 2))
+        self.webdav_url_e = ctk.CTkEntry(c2, placeholder_text="https://cloud.example.com/remote.php/dav/files/user/")
+        self.webdav_url_e.pack(fill="x", padx=15, pady=4)
+        w_auth = ctk.CTkFrame(c2, fg_color="transparent")
+        w_auth.pack(fill="x", padx=15, pady=4)
+        self.webdav_user_e = ctk.CTkEntry(w_auth, placeholder_text="Login / Użytkownik")
+        self.webdav_user_e.pack(side="left", expand=True, fill="x", padx=(0, 4))
+        self.webdav_pwd_e = ctk.CTkEntry(w_auth, show="•", placeholder_text="Hasło / Token aplikacji")
+        self.webdav_pwd_e.pack(side="left", expand=True, fill="x", padx=(4, 0))
+        b2 = ctk.CTkFrame(c2, fg_color="transparent")
+        b2.pack(fill="x", padx=15, pady=(4, 8))
+        self._action_button(b2, text="Testuj", width=75, fg_color=COLOR_PANEL_DARK, command=lambda: self._test("webdav")).pack(side="left", padx=(0, 6))
+        self._action_button(b2, text="Wyślij kopię na WebDAV", fg_color=COLOR_PRIMARY, command=lambda: self._run_backup("webdav")).pack(side="left")
+
+        # Konfiguracja aplikacji OAuth (Client ID)
+        self._build_oauth_config_card(scroll)
+
+        # Pasek akcji
+        bar = ctk.CTkFrame(self, fg_color=COLOR_CARD_DARK, corner_radius=8, height=50)
+        bar.pack(fill="x", side="bottom", pady=(5, 0))
+        self._action_button(bar, text="🚀 Kopia na wszystkich platformach", fg_color=COLOR_PRIMARY, command=self._run_all).pack(side="left", padx=10, pady=8)
+        ctk.CTkButton(bar, text="Zapisz ustawienia", fg_color=COLOR_SUCCESS, command=self._save_settings).pack(side="right", padx=10, pady=8)
+
+    def _build_cloud_card(self, parent, key: str, title: str, login_text: str, folder_hint: str):
+        card = ctk.CTkFrame(parent, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        card.pack(fill="x", pady=6, ipady=6)
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=15, pady=(8, 2))
+        ctk.CTkLabel(head, text=title, font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(side="left")
+        status = ctk.CTkLabel(head, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
+        status.pack(side="right")
+
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=4)
+        login_btn = ctk.CTkButton(row, text=login_text, fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, command=lambda: self._login_or_logout(key))
+        login_btn.pack(side="left", padx=(0, 6))
+        self._action_button(row, text="Testuj", width=70, fg_color=COLOR_PANEL_DARK, command=lambda: self._test(key)).pack(side="left", padx=(0, 6))
+        self._action_button(row, text="Wyślij kopię", width=100, fg_color=COLOR_PANEL_DARK, command=lambda: self._run_backup(key)).pack(side="left")
+
+        ctk.CTkLabel(card, text="…lub zamiast logowania: folder synchronizacji na tym komputerze", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=15, pady=(4, 0))
+        f_row = ctk.CTkFrame(card, fg_color="transparent")
+        f_row.pack(fill="x", padx=15, pady=(2, 8))
+        folder_e = ctk.CTkEntry(f_row, placeholder_text=folder_hint)
+        folder_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(f_row, text="Wybierz...", width=80, fg_color=COLOR_PANEL_DARK, command=lambda: self._browse_into(folder_e, f"Folder: {title}")).pack(side="left")
+
+        self._cloud[key] = {"status": status, "login_btn": login_btn, "login_text": login_text, "folder_e": folder_e, "cancel": None}
+
+    def _build_oauth_config_card(self, parent):
+        card = ctk.CTkFrame(parent, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        card.pack(fill="x", pady=6, ipady=6)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=15, pady=(8, 2))
+        ctk.CTkLabel(head, text="⚙️ Konfiguracja logowania do chmury", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(side="left")
+        self._oauth_toggle_btn = ctk.CTkButton(head, text="Pokaż", width=70, height=26, fg_color=COLOR_PANEL_DARK, command=self._toggle_oauth_config)
+        self._oauth_toggle_btn.pack(side="right")
+        ctk.CTkLabel(
+            card,
+            text="Jednorazowo: identyfikatory aplikacji zarejestrowanej u dostawcy (Client ID).",
+            font=FONT_SMALL, text_color=COLOR_TEXT_MUTED
+        ).pack(anchor="w", padx=15)
+
+        self._oauth_body = ctk.CTkFrame(card, fg_color="transparent")
+        self._oauth_entries: Dict[str, Dict[str, ctk.CTkEntry]] = {}
+        fields = [
+            ("onedrive", "Microsoft – Identyfikator aplikacji (klienta)", False),
+            ("google_drive", "Google – Client ID", True),
+            ("dropbox", "Dropbox – App key", False),
+        ]
+        for key, label, with_secret in fields:
+            client = oauth.get_client_config(key)
+            ctk.CTkLabel(self._oauth_body, text=label, font=FONT_BODY_BOLD).pack(anchor="w", pady=(8, 2))
+            id_e = ctk.CTkEntry(self._oauth_body, placeholder_text="Client ID")
+            if client.get("client_id"):
+                id_e.insert(0, client["client_id"])
+            id_e.pack(fill="x")
+            entries = {"id": id_e}
+            if with_secret:
+                sec_e = ctk.CTkEntry(self._oauth_body, show="•", placeholder_text="Client Secret (Google wymaga go także dla aplikacji desktopowych)")
+                if client.get("client_secret"):
+                    sec_e.insert(0, client["client_secret"])
+                sec_e.pack(fill="x", pady=(4, 0))
+                entries["secret"] = sec_e
+            self._oauth_entries[key] = entries
+
+        btns = ctk.CTkFrame(self._oauth_body, fg_color="transparent")
+        btns.pack(fill="x", pady=(10, 4))
+        ctk.CTkButton(btns, text="Zapisz identyfikatory", fg_color=COLOR_SUCCESS, command=self._save_oauth_clients).pack(side="left")
+        ctk.CTkButton(btns, text="❓ Jak uzyskać Client ID", fg_color=COLOR_PANEL_DARK, command=self._show_oauth_help).pack(side="left", padx=6)
+
+    def _toggle_oauth_config(self, force_open: bool = False):
+        if self._oauth_body.winfo_ismapped() and not force_open:
+            self._oauth_body.pack_forget()
+            self._oauth_toggle_btn.configure(text="Pokaż")
+        else:
+            self._oauth_body.pack(fill="x", padx=15, pady=(0, 8))
+            self._oauth_toggle_btn.configure(text="Ukryj")
+
+    def _save_oauth_clients(self):
+        try:
+            for key, entries in self._oauth_entries.items():
+                oauth.save_client_config(key, entries["id"].get(), entries["secret"].get() if "secret" in entries else "")
+        except OSError as e:
+            messagebox.showerror("Błąd", f"Nie udało się zapisać konfiguracji: {e}")
+            return
+        messagebox.showinfo("Zapisano", "Identyfikatory aplikacji zostały zapisane. Możesz się teraz zalogować.")
+
+    def _show_oauth_help(self):
+        messagebox.showinfo(
+            "Jak uzyskać Client ID",
+            "Każdy dostawca wymaga jednorazowej rejestracji aplikacji (bezpłatnie):\n\n"
+            "MICROSOFT (OneDrive)\n"
+            "1. portal.azure.com → Rejestracje aplikacji → Nowa rejestracja\n"
+            "2. Obsługiwane konta: dowolny katalog organizacyjny + osobiste konta Microsoft\n"
+            "3. Identyfikator URI przekierowania: platforma 'Klient publiczny/natywny', adres http://localhost\n"
+            "4. Skopiuj 'Identyfikator aplikacji (klienta)'\n\n"
+            "GOOGLE (Dysk Google)\n"
+            "1. console.cloud.google.com → nowy projekt → włącz 'Google Drive API'\n"
+            "2. Ekran zgody OAuth: typ Zewnętrzny, dodaj swój e-mail jako użytkownika testowego\n"
+            "3. Dane logowania → Utwórz identyfikator klienta OAuth → typ 'Aplikacja komputerowa'\n"
+            "4. Skopiuj Client ID oraz Client Secret\n\n"
+            "DROPBOX\n"
+            "1. dropbox.com/developers/apps → Create app → Scoped access → App folder\n"
+            "2. Permissions: files.content.write, files.content.read, account_info.read\n"
+            f"3. Settings → Redirect URIs: {oauth.redirect_uri('dropbox')}\n"
+            "4. Skopiuj 'App key'"
+        )
+
+    # ------------------------------------------------------------- stan
+    def _browse_into(self, entry: ctk.CTkEntry, title: str):
+        d = filedialog.askdirectory(title=title)
+        if d:
+            entry.delete(0, "end")
+            entry.insert(0, d)
+
+    def _load(self):
+        b_dest = self._dest()
+        self.auto_b_var.set(self.vault.settings.get("auto_backup_on_save", True))
+
+        def _fill(widget, value):
+            # Wstawianie pustego tekstu kasuje placeholder CTkEntry
+            if value:
+                widget.insert(0, value)
+
+        _fill(self.local_dir_e, (b_dest.get("local") or {}).get("folder_path", ""))
+        wd = b_dest.get("webdav", {})
+        _fill(self.webdav_url_e, wd.get("url", ""))
+        _fill(self.webdav_user_e, wd.get("username", ""))
+        _fill(self.webdav_pwd_e, wd.get("password", ""))
+        for key, *_ in self.CLOUDS:
+            _fill(self._cloud[key]["folder_e"], (b_dest.get(key) or {}).get("folder_path", ""))
+            self._refresh_cloud_status(key)
+
+    def _refresh_cloud_status(self, key: str):
+        w = self._cloud[key]
+        if w["cancel"] is not None:
+            return  # trwa logowanie
+        cfg = self._dest().get(key) or {}
+        if oauth.is_connected(cfg):
+            account = (cfg.get("oauth") or {}).get("account") or "połączono"
+            w["status"].configure(text=f"✅ {account}", text_color=COLOR_SUCCESS)
+            w["login_btn"].configure(text="Wyloguj", fg_color=COLOR_PANEL_DARK, state="normal")
+        else:
+            w["status"].configure(text="Nie połączono", text_color=COLOR_TEXT_MUTED)
+            w["login_btn"].configure(text=w["login_text"], fg_color=COLOR_PRIMARY, state="normal")
+
+    def _apply_settings(self) -> None:
+        """Przepisuje wartości z formularza do ustawień sejfu i zapisuje sejf (bez komunikatu)."""
+        self.vault.settings["auto_backup_on_save"] = self.auto_b_var.get()
+        dest = self._dest()
+
+        local = dest.setdefault("local", {})
+        local["folder_path"] = self.local_dir_e.get().strip()
+        local.setdefault("max_backups", 15)
+
+        webdav = dest.setdefault("webdav", {})
+        webdav.update({
+            "enabled": bool(self.webdav_url_e.get().strip()),
+            "url": self.webdav_url_e.get().strip(),
+            "username": self.webdav_user_e.get().strip(),
+            "password": self.webdav_pwd_e.get().strip()
+        })
+        webdav.setdefault("remote_folder", "KeyStead-Backups")
+
+        for key, *_ in self.CLOUDS:
+            cfg = dest.setdefault(key, {})
+            cfg["folder_path"] = self._cloud[key]["folder_e"].get().strip()
+            cfg["enabled"] = bool(cfg["folder_path"] or oauth.is_connected(cfg))
+
+        if self.on_saved:
+            self.on_saved()
+
+    def _save_settings(self):
+        self._apply_settings()
+        messagebox.showinfo("Zapisano", "Ustawienia kopii zapasowych zostały pomyślnie zapisane.")
+
+    def _set_busy(self, busy: bool):
+        for btn in self._action_buttons:
+            if btn.winfo_exists():
+                btn.configure(state="disabled" if busy else "normal")
+
+    def _persist_runtime(self, key: str, cfg: Dict[str, Any]):
+        """Zapisuje w sejfie tokeny odświeżone podczas operacji w tle."""
+        if merge_runtime_state(self._dest(), {key: cfg}) and self.on_saved:
+            self.on_saved()
+
+    # ------------------------------------------------------------- logowanie
+    def _login_or_logout(self, key: str):
+        w = self._cloud[key]
+        if w["cancel"] is not None:
+            w["cancel"].set()  # przycisk działa jako "Anuluj" podczas logowania
+            return
+
+        cfg = self._dest().setdefault(key, {})
+        if oauth.is_connected(cfg):
+            if messagebox.askyesno("Wylogowanie", "Odłączyć to konto? Automatyczne kopie do tej chmury zostaną wstrzymane."):
+                old_tokens = dict(cfg.get("oauth") or {})
+                # Unieważnij token także po stronie dostawcy (w tle, bez blokowania UI)
+                threading.Thread(target=oauth.revoke, args=(key, old_tokens), daemon=True).start()
+                if key == "onedrive":
+                    messagebox.showinfo(
+                        "Wylogowano",
+                        "Microsoft nie pozwala aplikacjom unieważnić dostępu automatycznie.\n"
+                        "Aby całkowicie odebrać dostęp: account.microsoft.com → Prywatność → Aplikacje i usługi."
+                    )
+                cfg["oauth"] = {}
+                cfg.pop("api_token", None)
+                cfg.pop("folder_id", None)
+                cfg["enabled"] = bool(cfg.get("folder_path"))
+                if self.on_saved:
+                    self.on_saved()
+                self._refresh_cloud_status(key)
+            return
+
+        if not oauth.is_client_configured(key):
+            self._toggle_oauth_config(force_open=True)
+            messagebox.showwarning(
+                "Brak identyfikatora aplikacji",
+                "Aby logować się w przeglądarce, wpisz najpierw Client ID w sekcji "
+                "'Konfiguracja logowania do chmury' (na dole panelu) i kliknij 'Zapisz identyfikatory'.\n\n"
+                "Instrukcję znajdziesz pod przyciskiem '❓ Jak uzyskać Client ID'."
+            )
+            return
+
+        cancel = threading.Event()
+        w["cancel"] = cancel
+        w["login_btn"].configure(text="Anuluj logowanie", fg_color=COLOR_DANGER)
+        w["status"].configure(text="⏳ Dokończ logowanie w przeglądarce...", text_color=COLOR_WARNING)
+        provider = self.mgr.get_provider(key)
+
+        def _work():
+            tokens = oauth.login(key, cancel_event=cancel)
+            try:
+                tokens["account"] = provider.fetch_account_name(tokens["access_token"])
+            except Exception:
+                tokens["account"] = ""
+            return tokens
+
+        def _done(res):
+            w["cancel"] = None
+            if isinstance(res, Exception):
+                self._refresh_cloud_status(key)
+                if not cancel.is_set():
+                    messagebox.showerror("Logowanie nieudane", str(res))
+                return
+            cfg = self._dest().setdefault(key, {})
+            cfg["oauth"] = res
+            cfg.pop("folder_id", None)
+            cfg["enabled"] = True
+            if self.on_saved:
+                self.on_saved()
+            self._refresh_cloud_status(key)
+            messagebox.showinfo("Połączono", f"Zalogowano: {res.get('account') or 'konto połączone'}.\nKopie będą wysyłane do tej chmury.")
+
+        run_in_background(self, _work, _done)
+
+    # ------------------------------------------------------------- operacje
+    def _test(self, key: str):
+        self._apply_settings()
+        cfg = copy.deepcopy(self._dest().get(key, {}))
+        if key == "webdav" and not cfg.get("url"):
+            messagebox.showerror("Brak konfiguracji", "Podaj adres serwera WebDAV.")
+            return
+        self._set_busy(True)
+
+        def _done(res):
+            self._set_busy(False)
+            if isinstance(res, Exception):
+                messagebox.showerror("Test połączenia", str(res))
+                return
+            self._persist_runtime(key, cfg)
+            ok, msg = res
+            (messagebox.showinfo if ok else messagebox.showerror)("Test połączenia", msg)
+
+        run_in_background(self, lambda: self.mgr.test_provider(key, cfg), _done)
+
+    def _run_backup(self, p_key: str):
+        self._apply_settings()
+        cfg = copy.deepcopy(self._dest().get(p_key, {}))
+        if not self.mgr.get_provider(p_key).is_configured(cfg):
+            messagebox.showerror("Brak konfiguracji", "Zaloguj się lub uzupełnij najpierw dane tej lokalizacji kopii.")
+            return
+        vault_path = self.vault_file_path
+        self._set_busy(True)
+
+        def _work():
+            with vault_snapshot(vault_path) as snapshot:
+                return self.mgr.backup_to_provider(p_key, snapshot, cfg)
+
+        def _done(status):
+            self._set_busy(False)
+            if isinstance(status, Exception):
+                messagebox.showerror("Błąd", f"Nie udało się utworzyć kopii:\n{status}")
+                return
+            self._persist_runtime(p_key, cfg)
+            if status.success:
+                messagebox.showinfo("Kopia utworzona", f"Pomyślnie utworzono kopię:\n{status.destination_path}")
+            else:
+                messagebox.showerror("Błąd", f"Nie udało się utworzyć kopii:\n{status.error_message}")
+
+        run_in_background(self, _work, _done)
+
+    def _run_all(self):
+        self._apply_settings()
+        dest = copy.deepcopy(self._dest())
+        vault_path = self.vault_file_path
+        self._set_busy(True)
+
+        def _work():
+            with vault_snapshot(vault_path) as snapshot:
+                return self.mgr.backup_to_all_configured(snapshot, dest)
+
+        def _done(res):
+            self._set_busy(False)
+            if isinstance(res, Exception):
+                messagebox.showerror("Kopie zapasowe", f"Błąd: {res}")
+                return
+            if merge_runtime_state(self._dest(), dest) and self.on_saved:
+                self.on_saved()
+            if not res:
+                messagebox.showwarning("Kopie zapasowe", "Nie skonfigurowano żadnej lokalizacji kopii zapasowych.")
+                return
+            ok_cnt = sum(1 for r in res if r.success)
+            lines = [f"{'✅' if r.success else '❌'} {r.provider_name}" + ("" if r.success else f": {r.error_message}") for r in res]
+            messagebox.showinfo("Kopie zapasowe", f"Utworzono kopie na {ok_cnt} z {len(res)} platform.\n\n" + "\n".join(lines))
+
+        run_in_background(self, _work, _done)
+
+
+# =====================================================================
+# 5. KREATOR IMPORTU (IMPORT DRAWER VIEW)
+# =====================================================================
+class ImportDrawerView(ctk.CTkFrame):
+    def __init__(self, parent, vault: Vault, on_done: Optional[Callable[[int], None]] = None):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.vault = vault
+        self.on_done = on_done
+        self._analysis_result = None
+
+        self._build_ui()
+
+    def _build_ui(self):
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        ctk.CTkLabel(scroll, text="Wybierz źródłowy menedżer haseł:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 4))
+        imps = ["(Auto-detekcja) Wykryj automatycznie"] + [i.name for i in get_available_importers()]
+        self.imp_combo = ctk.CTkComboBox(scroll, values=imps)
+        self.imp_combo.set(imps[0])
+        self.imp_combo.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(scroll, text="Plik z danymi haseł:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 4))
+        fb = ctk.CTkFrame(scroll, fg_color="transparent")
+        fb.pack(fill="x", pady=(0, 10))
+        self.file_e = ctk.CTkEntry(fb, placeholder_text="Wskaż plik...")
+        self.file_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(fb, text="Wybierz...", width=80, fg_color=COLOR_CARD_DARK, command=self._browse).pack(side="left")
+
+        # Hasło / plik klucza do KeePass
+        self.pwd_e = ctk.CTkEntry(scroll, show="•", placeholder_text="Hasło do bazy (tylko KeePass .kdbx)...")
+        self.pwd_e.pack(fill="x", pady=(0, 6))
+
+        kb = ctk.CTkFrame(scroll, fg_color="transparent")
+        kb.pack(fill="x", pady=(0, 12))
+        self.keyfile_e = ctk.CTkEntry(kb, placeholder_text="Opcjonalny plik klucza KeePass...")
+        self.keyfile_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(kb, text="Klucz...", width=80, fg_color=COLOR_CARD_DARK, command=self._browse_keyfile).pack(side="left")
+
+        # Strategia duplikatów
+        ctk.CTkLabel(scroll, text="Gdy wpis już istnieje w sejfie (ten sam tytuł, login i URL):", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 4))
+        self._strategies = {
+            "Pomiń istniejące wpisy": STRATEGY_SKIP,
+            "Zaktualizuj istniejące wpisy": STRATEGY_UPDATE,
+            "Dodaj wszystkie jako nowe": STRATEGY_ADD_ALL
+        }
+        self.strategy_combo = ctk.CTkComboBox(scroll, values=list(self._strategies.keys()), state="readonly")
+        self.strategy_combo.set("Pomiń istniejące wpisy")
+        self.strategy_combo.pack(fill="x", pady=(0, 12))
+
+        # Analizuj
+        self.analyze_btn = ctk.CTkButton(scroll, text="🔍 Analizuj plik", fg_color=COLOR_PRIMARY, command=self._analyze)
+        self.analyze_btn.pack(fill="x", pady=(0, 12))
+
+        # Podgląd
+        self.preview_box = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=8)
+        self.preview_box.pack(fill="both", expand=True, pady=(0, 12), ipady=6)
+
+        self.preview_lbl = ctk.CTkLabel(self.preview_box, text="Wybierz plik i kliknij 'Analizuj plik'.", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
+        self.preview_lbl.pack(padx=10, pady=8)
+
+        # Przycisk importu
+        self.import_btn = ctk.CTkButton(scroll, text="📥 Zaimportuj znalezione wpisy", fg_color=COLOR_SUCCESS, state="disabled", command=self._execute_import)
+        self.import_btn.pack(fill="x", pady=(5, 10))
+
+    def _browse(self):
+        p = filedialog.askopenfilename(
+            title="Wybierz plik haseł",
+            filetypes=[("Obsługiwane bazy", "*.json;*.csv;*.kdbx;*.1pux;*.zip;*.xml"), ("Wszystkie", "*.*")]
+        )
+        if p:
+            self.file_e.delete(0, "end")
+            self.file_e.insert(0, p)
+            imp = detect_importer(p)
+            if imp:
+                self.imp_combo.set(imp.name)
+
+    def _browse_keyfile(self):
+        p = filedialog.askopenfilename(title="Wybierz plik klucza KeePass")
+        if p:
+            self.keyfile_e.delete(0, "end")
+            self.keyfile_e.insert(0, p)
+
+    def _analyze(self):
+        f = self.file_e.get().strip()
+        if not f or not os.path.exists(f):
+            messagebox.showerror("Błąd", "Plik nie istnieje.")
+            return
+
+        choice = self.imp_combo.get()
+        name = None if "Auto-detekcja" in choice else choice
+        pwd = self.pwd_e.get() or None
+        keyfile = self.keyfile_e.get().strip() or None
+        if keyfile and not os.path.isfile(keyfile):
+            messagebox.showerror("Błąd", "Wskazany plik klucza nie istnieje.")
+            return
+
+        self.analyze_btn.configure(text="Przetwarzanie...", state="disabled")
+        self.import_btn.configure(state="disabled")
+
+        def _ui(res):
+            self.analyze_btn.configure(text="🔍 Analizuj plik", state="normal")
+            if isinstance(res, Exception):
+                self._analysis_result = None
+                self.preview_lbl.configure(text=f"Błąd:\n{res}", text_color=COLOR_DANGER)
+                return
+            self._analysis_result = res
+            if res.items:
+                cats = ", ".join(res.categories_found[:6]) + ("..." if len(res.categories_found) > 6 else "")
+                text = f"Sukces ({res.source_format})\nZnaleziono wpisów: {len(res.items)}\nKategorie: {cats}"
+                if res.errors:
+                    text += "\n\nOstrzeżenia:\n" + "\n".join(res.errors[:5])
+                self.preview_lbl.configure(text=text, text_color=COLOR_SUCCESS, justify="left", wraplength=420)
+                self.import_btn.configure(state="normal")
+            else:
+                err = "\n".join(res.errors) if res.errors else "Nie odnaleziono wpisów."
+                self.preview_lbl.configure(text=f"Błąd:\n{err}", text_color=COLOR_DANGER, justify="left", wraplength=420)
+
+        run_in_background(self, lambda: run_import(f, importer_name=name, password=pwd, keyfile_path=keyfile), _ui)
+
+    def _execute_import(self):
+        if not self._analysis_result or not self._analysis_result.items:
+            return
+
+        strategy = self._strategies.get(self.strategy_combo.get(), STRATEGY_SKIP)
+        stats = apply_import(self.vault, self._analysis_result.items, strategy)
+        self._analysis_result = None
+        self.import_btn.configure(state="disabled")
+
+        messagebox.showinfo(
+            "Import zakończony",
+            f"Dodano nowych wpisów: {stats['added']}\n"
+            f"Zaktualizowano: {stats['updated']}\n"
+            f"Pominięto duplikatów: {stats['skipped']}"
+        )
+
+        # Eksporty CSV/JSON/XML/1PUX zawierają hasła otwartym tekstem – nie zostawiaj ich na dysku
+        source = self.file_e.get().strip()
+        if source and os.path.isfile(source) and is_plaintext_export(source):
+            if messagebox.askyesno(
+                "Usunąć plik eksportu?",
+                f"Plik {os.path.basename(source)} zawiera wszystkie hasła NIEZASZYFROWANE.\n\n"
+                "Zalecamy jego bezpieczne usunięcie (nadpisanie i skasowanie). Usunąć teraz?",
+                icon="warning"
+            ):
+                try:
+                    secure_delete_file(source)
+                    self.file_e.delete(0, "end")
+                except OSError as e:
+                    messagebox.showerror("Błąd", f"Nie udało się usunąć pliku: {e}\nUsuń go ręcznie i opróżnij Kosz systemu.")
+
+        if self.on_done:
+            self.on_done(stats["added"] + stats["updated"])
+
+
+# =====================================================================
+# 6. USTAWIENIA SEJFU (SETTINGS DRAWER VIEW)
+# =====================================================================
+class SettingsDrawerView(ctk.CTkFrame):
+    def __init__(
+        self,
+        parent,
+        vault: Vault,
+        current_password: str,
+        vault_file_path: str,
+        keyfile_bytes: Optional[bytes] = None,
+        on_pwd_changed: Optional[Callable[[str], None]] = None,
+        on_saved: Optional[Callable[[], None]] = None,
+        password_saver: Optional[Callable[[str], None]] = None,
+        policy: Optional[Dict[str, Any]] = None
+    ):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.vault = vault
+        self.current_password = current_password
+        self.vault_file_path = vault_file_path
+        self.keyfile_bytes = keyfile_bytes
+        self.on_pwd_changed = on_pwd_changed
+        self.on_saved = on_saved
+        # Tryb serwerowy podaje własny sposób zapisu (przez kolejkę synchronizacji)
+        self.password_saver = password_saver
+        self.policy = policy or {}
+        self._lock_choices = lock_choices(self.policy)
+        self._clip_choices = clipboard_choices(self.policy)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # Blokada i schowek
+        c1 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        c1.pack(fill="x", pady=6, ipady=6)
+        ctk.CTkLabel(c1, text="⏱️ Blokada i Schowek", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 4))
+
+        if self.policy:
+            ctk.CTkLabel(c1, text="🏢 Część opcji ogranicza polityka bezpieczeństwa Twojej firmy.", font=FONT_SMALL,
+                         text_color=COLOR_TEXT_ACCENT).pack(anchor="w", padx=15, pady=(0, 6))
+
+        ctk.CTkLabel(c1, text="Automatyczna blokada sejfu przy bezczynności:").pack(anchor="w", padx=15)
+        self.lock_cb = ctk.CTkComboBox(c1, values=[label for label, _ in self._lock_choices], state="readonly")
+        cur_min = effective_auto_lock(int(self.vault.settings.get("auto_lock_minutes", 5) or 0), self.policy)
+        self.lock_cb.set(next((l for l, m in self._lock_choices if m == cur_min), self._lock_choices[0][0]))
+        self.lock_cb.pack(anchor="w", padx=15, pady=(2, 8))
+
+        ctk.CTkLabel(c1, text="Czas czyszczenia schowka:").pack(anchor="w", padx=15)
+        self.clip_cb = ctk.CTkComboBox(c1, values=[label for label, _ in self._clip_choices], state="readonly")
+        cur_sec = effective_clipboard(int(self.vault.settings.get("clipboard_clear_seconds", 30) or 0), self.policy)
+        self.clip_cb.set(next((l for l, s in self._clip_choices if s == cur_sec), self._clip_choices[0][0]))
+        self.clip_cb.pack(anchor="w", padx=15, pady=(2, 10))
+
+        # Zmiana hasła głównego
+        c2 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        c2.pack(fill="x", pady=6, ipady=6)
+        ctk.CTkLabel(c2, text="🔑 Zmiana Hasła Głównego", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 4))
+
+        self.cur_p = ctk.CTkEntry(c2, show="•", placeholder_text="Aktualne hasło...")
+        self.cur_p.pack(fill="x", padx=15, pady=3)
+        self.new_p = ctk.CTkEntry(c2, show="•", placeholder_text="Nowe hasło (min. 8 znaków)...")
+        self.new_p.pack(fill="x", padx=15, pady=3)
+        self.cnf_p = ctk.CTkEntry(c2, show="•", placeholder_text="Potwierdź nowe hasło...")
+        self.cnf_p.pack(fill="x", padx=15, pady=3)
+
+        ctk.CTkButton(c2, text="Zmień hasło główne", fg_color=COLOR_PRIMARY, command=self._change_pwd).pack(anchor="w", padx=15, pady=(6, 8))
+
+        # Zapisz
+        bar = ctk.CTkFrame(self, fg_color=COLOR_CARD_DARK, corner_radius=8, height=50)
+        bar.pack(fill="x", side="bottom", pady=(5, 0))
+        ctk.CTkButton(bar, text="Zapisz ustawienia", fg_color=COLOR_SUCCESS, command=self._save).pack(side="right", padx=10, pady=8)
+
+    def _save(self):
+        self.vault.settings["auto_lock_minutes"] = dict(self._lock_choices).get(self.lock_cb.get(), self._lock_choices[0][1])
+        self.vault.settings["clipboard_clear_seconds"] = dict(self._clip_choices).get(self.clip_cb.get(), self._clip_choices[0][1])
+        if self.on_saved:
+            self.on_saved()
+        messagebox.showinfo("Zapisano", "Ustawienia zostały zapisane.")
+
+    def _change_pwd(self):
+        if not hmac.compare_digest(self.cur_p.get().encode("utf-8"), self.current_password.encode("utf-8")):
+            messagebox.showerror("Błąd", "Aktualne hasło jest niepoprawne.")
+            return
+        np = self.new_p.get()
+        if np != self.cnf_p.get():
+            messagebox.showerror("Błąd", "Nowe hasła nie są identyczne.")
+            return
+        allowed, policy_msg = check_master_password(np)
+        if not allowed:
+            messagebox.showerror("Zbyt słabe hasło główne", policy_msg)
+            return
+        required = min_master_score(self.policy)
+        if required and evaluate_password_strength(np)["score"] < required:
+            messagebox.showerror(
+                "Wymaganie firmy",
+                f"Polityka bezpieczeństwa firmy wymaga hasła głównego o sile co najmniej: „{SCORE_LABELS[required]}”."
+            )
+            return
+        if policy_msg and not required and not messagebox.askyesno("Średnio silne hasło główne", policy_msg + "\n\nUżyć mimo to?", icon="warning"):
+            return
+        try:
+            if self.password_saver:
+                self.password_saver(np)  # zapis + powiadomienie o zmianie hasła
+            else:
+                # Plik-klucz (jeśli był używany) pozostaje drugim składnikiem zabezpieczenia
+                save_vault(self.vault, self.vault_file_path, np, self.keyfile_bytes)
+                if self.on_pwd_changed:
+                    self.on_pwd_changed(np)
+            self.current_password = np
+            messagebox.showinfo("Sukces", "Hasło główne zostało zmienione!")
+            self.cur_p.delete(0, "end")
+            self.new_p.delete(0, "end")
+            self.cnf_p.delete(0, "end")
+        except Exception as e:
+            messagebox.showerror("Błąd", str(e))
+
+
+# =====================================================================
+# 7. SYNCHRONIZACJA Z SERWEREM (SYNC DRAWER VIEW)
+# =====================================================================
+def _format_time(value) -> str:
+    """ISO (UTC) lub znacznik czasu → czas lokalny 'dd.mm.rrrr gg:mm'."""
+    if not value:
+        return "—"
+    try:
+        if isinstance(value, (int, float)):
+            dt = datetime.fromtimestamp(value)
+        else:
+            dt = datetime.fromisoformat(value).astimezone()
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except (ValueError, OSError):
+        return str(value)
+
+
+class SyncDrawerView(ctk.CTkFrame):
+    STATE_LABELS = {
+        "synced": ("🟢", "Zsynchronizowano", COLOR_SUCCESS),
+        "syncing": ("🔄", "Synchronizacja w toku", COLOR_PRIMARY_LIGHT),
+        "pending": ("🔄", "Zapisywanie zmian", COLOR_PRIMARY_LIGHT),
+        "offline": ("🟠", "Brak połączenia z serwerem", COLOR_WARNING),
+        "conflict": ("⚠️", "Konflikt wersji", COLOR_DANGER),
+        "error": ("⚠️", "Wymaga uwagi", COLOR_DANGER),
+    }
+
+    def __init__(self, parent, session, on_vault_replaced: Callable[[Vault, str], None], on_sync_now: Optional[Callable[..., None]] = None):
+        super().__init__(parent, fg_color="transparent")
+        self.pack(fill="both", expand=True)
+        self.session = session
+        self.on_vault_replaced = on_vault_replaced
+        self.on_sync_now = on_sync_now
+        self._shown_state = None
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True)
+
+        # Karta stanu
+        card = ctk.CTkFrame(self.scroll, fg_color=COLOR_CARD_DARK, corner_radius=12)
+        card.pack(fill="x", pady=(0, 12), ipady=6)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=15, pady=(10, 2))
+        self.state_lbl = ctk.CTkLabel(head, text="", font=FONT_SUBTITLE, anchor="w")
+        self.state_lbl.pack(side="left")
+        self.sync_btn = ctk.CTkButton(head, text="🔄 Synchronizuj teraz", width=150, fg_color=COLOR_PRIMARY, command=self._sync_now)
+        self.sync_btn.pack(side="right")
+        self.message_lbl = ctk.CTkLabel(card, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w", justify="left", wraplength=480)
+        self.message_lbl.pack(anchor="w", padx=15, pady=(0, 6))
+
+        self.details = ctk.CTkFrame(card, fg_color="transparent")
+        self.details.pack(fill="x", padx=15, pady=(0, 8))
+
+        # Rozwiązywanie konfliktu (pokazywane tylko w razie potrzeby)
+        self.conflict_card = ctk.CTkFrame(self.scroll, fg_color=COLOR_CARD_DARK, corner_radius=12, border_width=1, border_color=COLOR_DANGER)
+        ctk.CTkLabel(self.conflict_card, text="Którą wersję zachować?", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(10, 2))
+        ctk.CTkLabel(
+            self.conflict_card,
+            text="Sejf zmieniono na innym urządzeniu, a na tym komputerze są zmiany, których serwer jeszcze nie ma.\n"
+                 "Niezależnie od wyboru, druga wersja zostaje w historii serwera i można ją później przywrócić.",
+            font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, justify="left", wraplength=480
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+        btns = ctk.CTkFrame(self.conflict_card, fg_color="transparent")
+        btns.pack(fill="x", padx=15, pady=(0, 12))
+        self.use_server_btn = ctk.CTkButton(btns, text="⬇️ Pobierz wersję z serwera", fg_color=COLOR_PANEL_DARK, command=self._use_server)
+        self.use_server_btn.pack(side="left", padx=(0, 6))
+        self.keep_local_btn = ctk.CTkButton(btns, text="⬆️ Zachowaj moją wersję", fg_color=COLOR_DANGER, command=self._keep_local)
+        self.keep_local_btn.pack(side="left")
+
+        # Historia wersji
+        self.history_head = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.history_head.pack(fill="x", pady=(4, 4))
+        ctk.CTkLabel(self.history_head, text="Historia wersji na serwerze", font=FONT_BODY_BOLD).pack(side="left")
+        ctk.CTkButton(self.history_head, text="Odśwież", width=70, height=24, fg_color=COLOR_PANEL_DARK, command=self._load_history).pack(side="right")
+        self.history_box = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.history_box.pack(fill="x")
+
+        self._refresh_status()
+        self._load_history()
+        self._tick()
+
+    # ------------------------------------------------------------ stan
+    def _tick(self):
+        if self.winfo_exists():
+            self._refresh_status()
+            self.after(1000, self._tick)
+
+    def _refresh_status(self):
+        st = self.session.status()
+        icon, label, color = self.STATE_LABELS.get(st.state, ("☁️", st.state, COLOR_TEXT_PRIMARY))
+        self.state_lbl.configure(text=f"{icon}  {label}", text_color=color)
+        self.message_lbl.configure(text=st.message)
+
+        signature = (st.state, st.local_version, st.last_sync, (st.remote_meta or {}).get("version"))
+        if signature == self._shown_state:
+            return
+        self._shown_state = signature
+
+        for w in self.details.winfo_children():
+            w.destroy()
+        remote = st.remote_meta or {}
+        rows = [
+            ("Serwer", self.session.profile.url),
+            ("To urządzenie", self.session.profile.device_name or "—"),
+            ("Wersja na tym komputerze", f"v{st.local_version}" + ("  (niewysłane zmiany)" if st.pending else "")),
+            ("Wersja na serwerze", f"v{remote['version']} · {_format_time(remote.get('updated_at'))} · {remote.get('updated_by', '?')}" if remote else "—"),
+            ("Ostatnia synchronizacja", _format_time(st.last_sync)),
+        ]
+        for key, value in rows:
+            r = ctk.CTkFrame(self.details, fg_color="transparent")
+            r.pack(fill="x", pady=1)
+            ctk.CTkLabel(r, text=f"{key}:", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, width=170, anchor="w").pack(side="left")
+            ctk.CTkLabel(r, text=value, font=FONT_SMALL, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(side="left")
+
+        if st.state in ("conflict", "error"):
+            self.conflict_card.pack(fill="x", pady=(0, 12), before=self.history_head)
+        else:
+            self.conflict_card.pack_forget()
+
+    def _busy(self, busy: bool):
+        for b in (self.sync_btn, self.use_server_btn, self.keep_local_btn):
+            if b.winfo_exists():
+                b.configure(state="disabled" if busy else "normal")
+
+    # ------------------------------------------------------------ akcje
+    def _sync_now(self):
+        if not self.on_sync_now:
+            return
+        self._busy(True)
+
+        def _finished():
+            if self.winfo_exists():
+                self._busy(False)
+                self._refresh_status()
+                self._load_history()
+        self.on_sync_now(on_finished=_finished)
+
+    def _use_server(self):
+        if not messagebox.askyesno("Pobierz wersję z serwera", "Zmiany z tego komputera, których nie ma na serwerze, zostaną odrzucone. Kontynuować?"):
+            return
+        self._busy(True)
+
+        def _done(res):
+            self._busy(False)
+            if isinstance(res, Exception):
+                messagebox.showerror("Synchronizacja", str(res))
+            else:
+                self.on_vault_replaced(res, "⬇️ Wczytano wersję z serwera")
+        run_in_background(self, self.session.resolve_use_server, _done)
+
+    def _keep_local(self):
+        if not messagebox.askyesno("Zachowaj moją wersję", "Wersja z tego komputera zastąpi wersję na serwerze (poprzednia zostanie w historii). Kontynuować?"):
+            return
+        self._busy(True)
+
+        def _done(res):
+            self._busy(False)
+            if isinstance(res, Exception):
+                messagebox.showerror("Synchronizacja", str(res))
+            self._refresh_status()
+            self._load_history()
+        run_in_background(self, self.session.resolve_keep_local, _done)
+
+    def _load_history(self):
+        for w in self.history_box.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self.history_box, text="Wczytywanie...", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w")
+
+        def _done(res):
+            for w in self.history_box.winfo_children():
+                w.destroy()
+            if isinstance(res, Exception):
+                ctk.CTkLabel(self.history_box, text=f"Nie udało się pobrać historii: {res}", font=FONT_SMALL, text_color=COLOR_WARNING, wraplength=480, justify="left").pack(anchor="w")
+                return
+            current = (self.session.status().remote_meta or {}).get("version")
+            for item in res:
+                row = ctk.CTkFrame(self.history_box, fg_color=COLOR_CARD_DARK, corner_radius=8)
+                row.pack(fill="x", pady=2)
+                is_current = item["version"] == current
+                text = f"v{item['version']}   {_format_time(item.get('updated_at'))}   ·   {item.get('updated_by', '?')}"
+                ctk.CTkLabel(row, text=text, font=FONT_BODY_BOLD if is_current else FONT_BODY,
+                             text_color=COLOR_SUCCESS if is_current else COLOR_TEXT_PRIMARY).pack(side="left", padx=12, pady=6)
+                if is_current:
+                    ctk.CTkLabel(row, text="bieżąca", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="right", padx=12)
+                else:
+                    ctk.CTkButton(row, text="Przywróć", width=80, height=26, fg_color=COLOR_PANEL_DARK,
+                                  command=lambda v=item["version"]: self._restore(v)).pack(side="right", padx=8)
+        run_in_background(self, self.session.history, _done)
+
+    def _restore(self, version: int):
+        if not messagebox.askyesno(
+            "Przywróć wersję",
+            f"Przywrócić sejf do wersji v{version}?\n\nZostanie ona zapisana jako nowa, najnowsza wersja – "
+            "obecna wersja pozostanie w historii."
+        ):
+            return
+        self._busy(True)
+
+        def _done(res):
+            self._busy(False)
+            if isinstance(res, Exception):
+                messagebox.showerror("Przywracanie wersji", str(res))
+            else:
+                self.on_vault_replaced(res, f"⏪ Przywrócono wersję v{version}")
+        run_in_background(self, lambda: self.session.restore_version(version), _done)

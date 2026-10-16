@@ -1,0 +1,1243 @@
+"""
+Główny pulpit nawigacyjny odblokowanego sejfu haseł (Main Vault View).
+W pełni responsywny interfejs z bocznym, płynnie wysuwanym panelem (Sliding Drawer),
+obsługą kosza (Trash / Recycle Bin), wizualizatorem kart płatniczych oraz serwerów/Wi-Fi.
+"""
+
+import os
+import re
+import webbrowser
+from urllib.parse import urlparse
+import threading
+import tkinter as tk
+import tkinter.font as tkfont
+from typing import Optional, Callable, List, Dict, Any
+import customtkinter as ctk
+from tkinter import messagebox
+
+from core.vault import Vault, VaultEntry, DEFAULT_CATEGORIES
+from core.crypto import encrypt_payload
+from core.storage import background_saver
+from core.totp_service import get_current_totp, get_totp_remaining_seconds
+from core.generator import evaluate_password_strength
+from core.security_audit import check_password_breach_hibp
+from ui.theme import (
+    FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_CODE, FONT_SMALL, FONT_TOTP,
+    COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT, COLOR_CARD_DARK, COLOR_CARD_HOVER, COLOR_PANEL_DARK,
+    COLOR_SUCCESS, COLOR_DANGER, COLOR_WARNING, COLOR_BORDER, COLOR_TEXT_PRIMARY,
+    COLOR_TEXT_MUTED, COLOR_TEXT_ACCENT
+)
+from ui.clipboard import SecureClipboard
+from ui.policy import effective_clipboard, personal_backups_allowed
+from ui.drawer import SlidingDrawer
+from ui.entry_list import EntryList
+from ui import perf
+
+perf.apply()
+from ui.drawer_views import (
+    EntryDrawerView,
+    GeneratorDrawerView,
+    AuditDrawerView,
+    BackupDrawerView,
+    ImportDrawerView,
+    SettingsDrawerView,
+    SyncDrawerView
+)
+
+
+class MainView(ctk.CTkFrame):
+    def __init__(
+        self,
+        parent,
+        vault: Vault,
+        master_password: str,
+        vault_file_path: str,
+        keyfile_bytes: Optional[bytes] = None,
+        on_lock_requested: Optional[Callable[[], None]] = None,
+        on_auto_backup_trigger: Optional[Callable[[], None]] = None,
+        on_master_password_changed: Optional[Callable[[str], None]] = None,
+        sync_session=None,
+        on_sync_requested: Optional[Callable[..., None]] = None,
+        on_vault_replaced: Optional[Callable[[Vault], None]] = None,
+        on_audit_report: Optional[Callable[[Any], None]] = None
+    ):
+        super().__init__(parent, fg_color="transparent")
+        self.vault = vault
+        self.master_password = master_password
+        self.vault_file_path = vault_file_path
+        self.keyfile_bytes = keyfile_bytes
+        self.on_lock_requested = on_lock_requested
+        self.on_auto_backup_trigger = on_auto_backup_trigger
+        self.on_master_password_changed = on_master_password_changed
+        # Tryb serwerowy: zapis idzie do lokalnej kopii i jest wysyłany na serwer synchronizacji
+        self.sync_session = sync_session
+        self.on_sync_requested = on_sync_requested
+        self.on_vault_replaced = on_vault_replaced
+        self.on_audit_report = on_audit_report
+        self.policy: Dict[str, Any] = {}  # polityki firmy z serwera (puste przy sejfie lokalnym)
+        self._pending_remote_vault: Optional[Vault] = None
+        self._last_sync_state: Optional[str] = None
+        self._last_sync_status = None
+
+        self.selected_entry_id: Optional[str] = None
+        self.selected_category: str = "Wszystkie"
+        self.selected_tag: Optional[str] = None
+        self.favorite_filter: bool = False
+        self.trash_mode: bool = False
+        self.search_query: str = ""
+
+        self._password_revealed = False
+        self._totp_timer_id = None
+        self._is_compact_sidebar = False
+        self._last_win_width = 1200
+        self._label_pad_cache = {}
+
+        self._build_ui()
+        self._refresh_entries_list()
+        self._start_totp_ticker()
+
+        # Inicjalizacja wysuwanego z boku panelu (Sliding Drawer)
+        self.drawer = SlidingDrawer(self)
+
+        # Nasłuchiwanie zmiany rozmiaru okna dla pełnej responsywności
+        self.bind("<Configure>", self._on_window_resized)
+
+    def destroy(self):
+        """Zatrzymuje timery i odpina skróty przed zniszczeniem widoku (blokada sejfu)."""
+        if self._totp_timer_id:
+            try:
+                self.after_cancel(self._totp_timer_id)
+            except Exception:
+                pass
+            self._totp_timer_id = None
+        if hasattr(self, "drawer"):
+            self.drawer.destroy()
+        super().destroy()
+
+    def _run_in_background(self, work: Callable[[], Any], on_done: Callable[[Any], None]):
+        """Uruchamia pracę sieciową w wątku i bezpiecznie wraca z wynikiem do wątku UI."""
+        def _worker():
+            result = work()
+            try:
+                self.after(0, lambda: self.winfo_exists() and on_done(result))
+            except Exception:
+                pass  # Widok został zniszczony (np. blokada sejfu)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _build_ui(self):
+        # 1. Pasek górny (Top Navigation Bar)
+        self.top_bar = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK, height=65, corner_radius=0)
+        self.top_bar.pack(fill="x", side="top")
+
+        # Lewa strona paska: Tytuł sejfu i przycisk zwijania bocznego menu
+        brand_box = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        brand_box.pack(side="left", padx=15, pady=12)
+
+        self.sidebar_toggle_btn = ctk.CTkButton(
+            brand_box,
+            text="☰",
+            width=36,
+            height=36,
+            font=("Segoe UI", 16, "bold"),
+            fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER,
+            command=self._toggle_sidebar_manually
+        )
+        self.sidebar_toggle_btn.pack(side="left", padx=(0, 10))
+
+        self.vault_title_lbl = ctk.CTkLabel(
+            brand_box,
+            text=f"🛡️ {self.vault.name}",
+            font=FONT_TITLE,
+            text_color=COLOR_TEXT_PRIMARY
+        )
+        self.vault_title_lbl.pack(side="left")
+
+        self.count_badge = ctk.CTkLabel(
+            brand_box,
+            text=f"({len(self.vault.entries)} wpisów)",
+            font=FONT_SMALL,
+            text_color=COLOR_TEXT_MUTED
+        )
+        self.count_badge.pack(side="left", padx=(8, 0))
+
+
+        # Środek: Wyszukiwarka na żywo
+        self.search_box = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        self.search_box.pack(side="left", expand=True, fill="x", padx=15)
+
+        self.search_entry = ctk.CTkEntry(
+            self.search_box,
+            placeholder_text="🔍 Szukaj wpisu (nazwa, login, tag, url)...",
+            height=36
+        )
+        self.search_entry.pack(side="left", fill="x", expand=True)
+        self.search_entry.bind("<KeyRelease>", self._on_search_typed)
+
+        # Prawa strona: Przyciski akcji (każdy wysuwa panel boczny)
+        self.actions_box = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        self.actions_box.pack(side="right", padx=15, pady=12)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="+ Nowy Wpis",
+            fg_color=COLOR_PRIMARY,
+            hover_color=COLOR_PRIMARY_HOVER,
+            width=100,
+            command=self._open_new_entry_dialog
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="⚡ Generator",
+            fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER,
+            width=85,
+            command=self._open_generator_dialog
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="🛡️ Audyt Wycieków",
+            fg_color="#7c3aed",
+            hover_color="#6d28d9",
+            width=125,
+            command=self._open_audit_dialog
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="☁️ Kopie i Chmura",
+            fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER,
+            width=115,
+            command=self._open_backup_dialog
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="📥 Import",
+            fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER,
+            width=75,
+            command=self._open_import_dialog
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="⚙️",
+            fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER,
+            width=36,
+            command=self._open_settings_dialog
+        ).pack(side="left", padx=3)
+
+        ctk.CTkButton(
+            self.actions_box,
+            text="🔒",
+            fg_color=COLOR_DANGER,
+            width=36,
+            command=self._lock_vault
+        ).pack(side="left", padx=3)
+
+        # 2. Główny kontener roboczy
+        self.workspace_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.workspace_frame.pack(fill="both", expand=True, padx=12, pady=12)
+
+        # 2.1 Pasek boczny (Sidebar)
+        self.sidebar_width = 220
+        self.sidebar_frame = ctk.CTkFrame(self.workspace_frame, width=self.sidebar_width, fg_color=COLOR_PANEL_DARK, corner_radius=12)
+        self.sidebar_frame.pack(side="left", fill="y", padx=(0, 10))
+        self.sidebar_frame.pack_propagate(False)
+
+        # Wskaźnik synchronizacji z serwerem (tylko w trybie serwerowym) – na górze bocznego menu
+        self.sync_btn = None
+        if self.sync_session:
+            self.sync_btn = ctk.CTkButton(
+                self.sidebar_frame, text="⏳ Łączenie...", height=32, font=FONT_BODY_BOLD,
+                fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, corner_radius=8,
+                command=self._open_sync_dialog
+            )
+            self.sync_btn.pack(fill="x", padx=8, pady=(10, 0))
+
+        # Kategorie i tagi (przebudowywane przy każdej zmianie filtrów)
+        self.sidebar_body = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.sidebar_body.pack(fill="both", expand=True)
+
+        self._build_sidebar()
+
+        # 2.2 Lista wpisów (Center Column)
+        self.entries_list_width = 300
+        self.entries_list_frame = ctk.CTkFrame(self.workspace_frame, width=self.entries_list_width, fg_color=COLOR_PANEL_DARK, corner_radius=12)
+        self.entries_list_frame.pack(side="left", fill="y", padx=(0, 10))
+        self.entries_list_frame.pack_propagate(False)
+
+        list_header = ctk.CTkFrame(self.entries_list_frame, fg_color="transparent")
+        list_header.pack(fill="x", padx=12, pady=(12, 6))
+
+        self.list_title_lbl = ctk.CTkLabel(list_header, text="Wszystkie wpisy", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY)
+        self.list_title_lbl.pack(side="left")
+
+        self.entry_list = EntryList(self.entries_list_frame, bg=COLOR_PANEL_DARK, on_select=self._select_entry)
+        self.entry_list.pack(fill="both", expand=True, padx=6, pady=(0, 10))
+
+        # 2.3 Szczegóły wpisu (Right Detail View)
+        self.details_frame = ctk.CTkFrame(self.workspace_frame, fg_color=COLOR_PANEL_DARK, corner_radius=12)
+        self.details_frame.pack(side="left", fill="both", expand=True)
+
+        self.details_scroll = ctk.CTkScrollableFrame(self.details_frame, fg_color="transparent")
+        self.details_scroll.pack(fill="both", expand=True, padx=20, pady=15)
+
+        self._show_empty_details()
+
+    # ----------------- RESPONSYWNOŚĆ OKNA -----------------
+    def _on_window_resized(self, event):
+        # Filtrujemy zdarzenia resize tylko z głównego widgetu
+        if event.widget != self:
+            return
+
+        w = event.width
+        if abs(w - self._last_win_width) < 25:
+            return
+        self._last_win_width = w
+
+        # Breakpoint: < 880px = zwinięte menu (tryb kompaktowy / ikony)
+        if w < 880 and not self._is_compact_sidebar:
+            self._is_compact_sidebar = True
+            self.sidebar_frame.configure(width=60)
+            self._build_sidebar()
+        elif w >= 880 and self._is_compact_sidebar:
+            self._is_compact_sidebar = False
+            self.sidebar_frame.configure(width=220)
+            self._build_sidebar()
+
+    def _toggle_sidebar_manually(self):
+        self._is_compact_sidebar = not self._is_compact_sidebar
+        self.sidebar_frame.configure(width=60 if self._is_compact_sidebar else 220)
+        self._build_sidebar()
+
+    # ----------------- SIDEBAR I FILTRY -----------------
+    def _build_sidebar(self):
+        for w in self.sidebar_body.winfo_children():
+            w.destroy()
+        if self._last_sync_status is not None:
+            self.update_sync_status(self._last_sync_status)  # tryb kompaktowy: sama ikona
+
+        scroll = ctk.CTkScrollableFrame(self.sidebar_body, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=4, pady=10)
+        self._sidebar_buttons = {}  # klucz filtra -> przycisk (zmiana zaznaczenia bez przebudowy paska)
+
+        is_compact = self._is_compact_sidebar
+
+        if not is_compact:
+            ctk.CTkLabel(scroll, text="KATEGORIE", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=8, pady=(0, 6))
+
+        all_cats = ["Wszystkie", "⭐ Ulubione"] + self.vault.categories
+
+        for cat in all_cats:
+            is_active = (not self.trash_mode) and (
+                (cat == self.selected_category and not self.favorite_filter) or
+                (cat == "⭐ Ulubione" and self.favorite_filter)
+            )
+            btn_color = COLOR_PRIMARY if is_active else "transparent"
+            text_color = COLOR_TEXT_PRIMARY if is_active else COLOR_TEXT_MUTED
+
+            if cat == "Wszystkie":
+                cnt = len(self.vault.entries)
+                icon = "📂"
+            elif cat == "⭐ Ulubione":
+                cnt = sum(1 for e in self.vault.entries.values() if e.favorite)
+                icon = "⭐"
+            else:
+                cnt = sum(1 for e in self.vault.entries.values() if e.category == cat)
+                icon = self._get_category_icon(cat)
+
+            btn_text = f"{icon}" if is_compact else f"{icon}  {cat} ({cnt})"
+
+            btn = ctk.CTkButton(
+                scroll,
+                text=btn_text,
+                anchor="center" if is_compact else "w",
+                fg_color=btn_color,
+                text_color=text_color,
+                hover_color=COLOR_CARD_HOVER,
+                corner_radius=8,
+                height=34,
+                command=lambda c=cat: self._select_category(c)
+            )
+            btn.pack(fill="x", pady=2)
+            self._sidebar_buttons[("cat", cat)] = btn
+
+        # Przycisk Kosza (Trash / Recycle Bin)
+        trash_cnt = len(self.vault.trash)
+        trash_active = self.trash_mode
+        trash_text = "🗑️" if is_compact else f"🗑️  Kosz ({trash_cnt})"
+
+        trash_btn = ctk.CTkButton(
+            scroll,
+            text=trash_text,
+            anchor="center" if is_compact else "w",
+            fg_color=COLOR_PRIMARY if trash_active else "transparent",
+            text_color=COLOR_DANGER if not trash_active else "#ffffff",
+            hover_color=COLOR_CARD_HOVER,
+            corner_radius=8,
+            height=34,
+            command=self._select_trash
+        )
+        trash_btn.pack(fill="x", pady=(10, 4))
+        self._sidebar_buttons[("trash", None)] = trash_btn
+
+        if not is_compact:
+            new_cat_btn = ctk.CTkButton(
+                scroll,
+                text="+ Nowa kategoria",
+                anchor="w",
+                font=FONT_SMALL,
+                fg_color="transparent",
+                text_color=COLOR_TEXT_ACCENT,
+                hover_color=COLOR_CARD_HOVER,
+                command=self._prompt_new_category
+            )
+            new_cat_btn.pack(fill="x", pady=(4, 15))
+
+            # Tagi
+            tags = set()
+            for e in self.vault.entries.values():
+                for t in e.tags:
+                    tags.add(t)
+
+            if tags:
+                ctk.CTkLabel(scroll, text="TAGI", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=8, pady=(8, 4))
+                for t in sorted(tags):
+                    tag_active = (self.selected_tag == t)
+                    tag_btn = ctk.CTkButton(
+                        scroll,
+                        text=f"🏷️ #{t}",
+                        anchor="w",
+                        fg_color=COLOR_PRIMARY if tag_active else "transparent",
+                        text_color=COLOR_TEXT_PRIMARY if tag_active else COLOR_TEXT_MUTED,
+                        height=26,
+                        corner_radius=6,
+                        command=lambda tag=t: self._toggle_tag_filter(tag)
+                    )
+                    tag_btn.pack(fill="x", pady=1)
+                    self._sidebar_buttons[("tag", t)] = tag_btn
+
+    def _get_category_icon(self, cat: str) -> str:
+        c = cat.lower()
+        if "login" in c or "konto" in c:
+            return "🔑"
+        elif "kart" in c or "bank" in c:
+            return "💳"
+        elif "notatk" in c:
+            return "📝"
+        elif "serwer" in c or "wi-fi" in c or "wifi" in c:
+            return "🖥️"
+        elif "tożsamoś" in c or "osob" in c:
+            return "👤"
+        return "📁"
+
+    def _select_category(self, cat: str):
+        self.trash_mode = False
+        if cat == "⭐ Ulubione":
+            self.favorite_filter = True
+            self.selected_category = "Wszystkie"
+        else:
+            self.favorite_filter = False
+            self.selected_category = cat
+
+        self.selected_tag = None
+        self._paint_sidebar_selection()
+        self._refresh_entries_list(keep_scroll=False)
+
+    def _select_trash(self):
+        self.trash_mode = True
+        self.favorite_filter = False
+        self.selected_category = "Kosz"
+        self.selected_tag = None
+        self._paint_sidebar_selection()
+        self._refresh_entries_list(keep_scroll=False)
+        self._show_trash_header_in_details()
+
+    def _toggle_tag_filter(self, tag: str):
+        self.trash_mode = False
+        self.selected_tag = None if self.selected_tag == tag else tag
+        self._paint_sidebar_selection()
+        self._refresh_entries_list(keep_scroll=False)
+
+    def _paint_sidebar_selection(self):
+        """Zmiana filtra: przekolorowanie przycisków zamiast przebudowy całego paska (liczniki się nie zmieniły)."""
+        buttons = getattr(self, "_sidebar_buttons", None)
+        if not buttons or any(not b.winfo_exists() for b in buttons.values()):
+            self._build_sidebar()
+            return
+        for (kind, name), btn in buttons.items():
+            if kind == "cat":
+                active = (not self.trash_mode) and ((name == self.selected_category and not self.favorite_filter)
+                                                    or (name == "⭐ Ulubione" and self.favorite_filter))
+                colors = (COLOR_PRIMARY, COLOR_TEXT_PRIMARY) if active else ("transparent", COLOR_TEXT_MUTED)
+            elif kind == "trash":
+                colors = (COLOR_PRIMARY, "#ffffff") if self.trash_mode else ("transparent", COLOR_DANGER)
+            else:
+                active = self.selected_tag == name
+                colors = (COLOR_PRIMARY, COLOR_TEXT_PRIMARY) if active else ("transparent", COLOR_TEXT_MUTED)
+            if (btn.cget("fg_color"), btn.cget("text_color")) != colors:
+                btn.configure(fg_color=colors[0], text_color=colors[1])
+
+    def _prompt_new_category(self):
+        dialog = ctk.CTkInputDialog(text="Podaj nazwę nowej kategorii:", title="Nowa kategoria")
+        val = dialog.get_input()
+        if val and val.strip():
+            if self.vault.add_category(val.strip()):
+                self._save_vault_to_disk()
+                self._build_sidebar()
+
+    def _on_search_typed(self, event=None):
+        # Przy szybkim pisaniu filtrujemy raz, po krótkiej przerwie, a nie po każdym klawiszu
+        if getattr(self, "_search_job", None):
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(120, self._flush_search)
+
+    def _flush_search(self):
+        if getattr(self, "_search_job", None):
+            self.after_cancel(self._search_job)
+        self._search_job = None
+        query = self.search_entry.get().strip()
+        if query != self.search_query:
+            self.search_query = query
+            self._refresh_entries_list(keep_scroll=False)
+
+    # ----------------- LISTA WPISÓW -----------------
+    def _refresh_entries_list(self, keep_scroll: bool = True):
+        if self.trash_mode:
+            results = self.vault.search(query=self.search_query, in_trash=True)
+            self.list_title_lbl.configure(text=f"🗑️ Kosz ({len(results)})")
+        else:
+            results = self.vault.search(
+                query=self.search_query,
+                category=self.selected_category if self.selected_category != "Wszystkie" else None,
+                tag=self.selected_tag,
+                favorite_only=self.favorite_filter,
+                in_trash=False
+            )
+            title_text = self.selected_category
+            if self.favorite_filter:
+                title_text = "⭐ Ulubione"
+            if self.selected_tag:
+                title_text += f" [#{self.selected_tag}]"
+            self.list_title_lbl.configure(text=f"{title_text} ({len(results)})")
+
+        items = [{"id": e.id,
+                  "title": f"{self._get_category_icon(e.category)} {e.title}{' ⭐' if e.favorite else ''}",
+                  "subtitle": e.username or e.category} for e in results]
+        empty = "Kosz jest pusty." if self.trash_mode else "Brak wpisów spełniających kryteria."
+        self.entry_list.selected_id = self.selected_entry_id
+        self.entry_list.set_items(items, empty_text=empty, keep_scroll=keep_scroll)
+
+    def _select_entry(self, entry_id: str):
+        if entry_id == self.selected_entry_id and self.details_scroll.winfo_children():
+            return  # ponowne kliknięcie tego samego wpisu – nic do przerysowania
+        self.selected_entry_id = entry_id
+        self._password_revealed = False
+        self.entry_list.set_selected(entry_id)
+        self._render_entry_details(entry_id)
+
+    # ----------------- WIDOK SZCZEGÓŁÓW WPISU -----------------
+    def _show_empty_details(self):
+        for w in self.details_scroll.winfo_children():
+            w.destroy()
+
+        if len(self.vault.entries) == 0:
+            welcome_card = ctk.CTkFrame(self.details_scroll, fg_color=COLOR_CARD_DARK, corner_radius=14)
+            welcome_card.pack(fill="x", pady=20, padx=10, ipady=12)
+
+            ctk.CTkLabel(welcome_card, text="🛡️ Witaj w Twoim nowym sejfie!", font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=20, pady=(15, 4))
+            ctk.CTkLabel(welcome_card, text="Twój sejf jest bezpiecznie zaszyfrowany (Argon2id + AES-256-GCM). Wybierz od czego chcesz zacząć:", font=FONT_BODY, text_color=COLOR_TEXT_MUTED, wraplength=520, justify="left").pack(anchor="w", padx=20, pady=(0, 15))
+
+            actions_grid = ctk.CTkFrame(welcome_card, fg_color="transparent")
+            actions_grid.pack(fill="x", padx=15, pady=(0, 15))
+
+            cards_def = [
+                ("➕", "Dodaj pierwsze hasło ręcznie", "Zapisz login, hasło, stronę www i 2FA.", "Dodaj wpis", self._open_new_entry_dialog, COLOR_PRIMARY),
+                ("📥", "Zaimportuj hasła z innego menedżera", "Bitwarden, KeePass (.kdbx), 1Password, Chrome...", "Kreator importu", self._open_import_dialog, COLOR_PANEL_DARK),
+                ("⚡", "Wygeneruj silne hasło", "Losowe hasło o wysokiej entropii lub fraza Diceware.", "Generator", self._open_generator_dialog, COLOR_PANEL_DARK),
+                ("☁️", "Włącz kopię w chmurze", "Automatyczne kopie na WebDAV/Nextcloud, Google Drive lub USB.", "Konfiguruj", self._open_backup_dialog, COLOR_PANEL_DARK)
+            ]
+
+            for icon, title, desc, btn_txt, cmd, btn_c in cards_def:
+                c = ctk.CTkFrame(actions_grid, fg_color=COLOR_PANEL_DARK, corner_radius=10)
+                c.pack(fill="x", pady=4)
+                r = ctk.CTkFrame(c, fg_color="transparent")
+                r.pack(fill="x", padx=12, pady=10)
+                ctk.CTkLabel(r, text=icon, font=("Segoe UI", 22)).pack(side="left", padx=(0, 10))
+                col = ctk.CTkFrame(r, fg_color="transparent")
+                col.pack(side="left", fill="x", expand=True)
+                ctk.CTkLabel(col, text=title, font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
+                ctk.CTkLabel(col, text=desc, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w").pack(anchor="w")
+                ctk.CTkButton(r, text=btn_txt, width=105, fg_color=btn_c, hover_color=COLOR_PRIMARY_HOVER, command=cmd).pack(side="right")
+        else:
+            empty_box = ctk.CTkFrame(self.details_scroll, fg_color="transparent")
+            empty_box.pack(fill="both", expand=True, pady=140)
+            ctk.CTkLabel(empty_box, text="🔐", font=("Segoe UI", 48)).pack(pady=(0, 10))
+            ctk.CTkLabel(empty_box, text="Wybierz wpis z listy po lewej stronie,", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack()
+            ctk.CTkLabel(empty_box, text="aby wyświetlić jego hasło, kod 2FA i szczegóły.", font=FONT_BODY, text_color=COLOR_TEXT_MUTED).pack(pady=(4, 20))
+            ctk.CTkButton(empty_box, text="+ Utwórz nowy wpis", fg_color=COLOR_PRIMARY, command=self._open_new_entry_dialog).pack()
+
+    def _show_trash_header_in_details(self):
+        for w in self.details_scroll.winfo_children():
+            w.destroy()
+        box = ctk.CTkFrame(self.details_scroll, fg_color="transparent")
+        box.pack(fill="both", expand=True, pady=120)
+        ctk.CTkLabel(box, text="🗑️", font=("Segoe UI", 48)).pack(pady=(0, 10))
+        ctk.CTkLabel(box, text="Kosz (Usunięte elementy)", font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack()
+        ctk.CTkLabel(box, text="Elementy w koszu można przywrócić lub trwale usunąć.", font=FONT_BODY, text_color=COLOR_TEXT_MUTED).pack(pady=(4, 15))
+
+        if len(self.vault.trash) > 0:
+            ctk.CTkButton(box, text="Opróżnij cały kosz", fg_color=COLOR_DANGER, command=self._empty_entire_trash).pack()
+
+    def _empty_entire_trash(self):
+        if messagebox.askyesno("Opróżnianie kosza", "Czy na pewno chcesz bezpowrotnie usunąć wszystkie elementy z kosza?"):
+            self.vault.empty_trash()
+            self._save_vault_to_disk()
+            self._build_sidebar()
+            self._refresh_entries_list()
+            self._show_trash_header_in_details()
+
+    @classmethod
+    def _plain_frame(cls, parent) -> tk.Frame:
+        """Ramka wyłącznie do układu: zwykła ramka Tk w kolorze rodzica (CTkFrame rysuje własne płótno – wolniej)."""
+        return tk.Frame(parent, bg=cls._bg_of(parent), bd=0, highlightthickness=0)
+
+    def _label(self, parent, text: str = "", font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, anchor: str = "center",
+               justify: str = "center", wraplength: int = 0) -> tk.Label:
+        """Statyczny tekst jako zwykła etykieta Tk – wygląda jak CTkLabel (ta sama czcionka i wysokość), a powstaje kilka razy szybciej."""
+        s = self._get_widget_scaling()
+        family, size, *style = font
+        tk_font = (family, -int(round(size * s)), *style)
+        # CTkLabel ma minimalną wysokość 28 px – zachowujemy ją, aby odstępy w panelu się nie zmieniły
+        key = (tk_font, s)
+        if key not in self._label_pad_cache:
+            line_h = tkfont.Font(family=family, size=tk_font[1], weight="bold" if "bold" in style else "normal") \
+                .metrics("linespace")
+            self._label_pad_cache[key] = max(0, int(28 * s) - line_h) // 2
+        return tk.Label(parent, text=text, font=tk_font, fg=text_color, bg=self._bg_of(parent), bd=0, padx=0,
+                        pady=self._label_pad_cache[key], anchor=anchor, justify=justify, wraplength=int(wraplength * s))
+
+    @staticmethod
+    def _bg_of(parent) -> str:
+        try:
+            return parent.cget("bg")  # widżety Tk oraz wnętrze CTkScrollableFrame
+        except (ValueError, tk.TclError):
+            color = parent.cget("fg_color")
+            if color == "transparent":
+                color = parent.cget("bg_color")
+            return parent._apply_appearance_mode(color)
+
+    def _render_entry_details(self, entry_id: str):
+        entry = self.vault.get_entry(entry_id)
+        if not entry:
+            self._show_empty_details()
+            return
+
+        # Nowy panel powstaje w ukrytej ramce i zastępuje stary w jednym kroku – bez przeliczania
+        # układu okna po każdym dodanym elemencie i bez migania pustego panelu
+        old_children = self.details_scroll.winfo_children()
+        container = self._plain_frame(self.details_scroll)
+        self._build_entry_details(container, entry, entry_id)
+        for w in old_children:
+            w.destroy()
+        container.pack(fill="both", expand=True)
+
+    def _build_entry_details(self, container, entry: VaultEntry, entry_id: str):
+
+        is_in_trash = (entry_id in self.vault.trash)
+
+        # 1. Pasek informacyjny jeśli wpis jest w koszu
+        if is_in_trash:
+            trash_bar = ctk.CTkFrame(container, fg_color=COLOR_DANGER, corner_radius=8)
+            trash_bar.pack(fill="x", pady=(0, 10), ipady=4)
+            r = self._plain_frame(trash_bar)
+            r.pack(fill="x", padx=12, pady=4)
+            self._label(r, text="⚠️ Ten wpis znajduje się w koszu.", font=FONT_BODY_BOLD, text_color="#ffffff").pack(side="left")
+            ctk.CTkButton(r, text="Przywróć ♻️", width=95, fg_color=COLOR_SUCCESS, command=lambda: self._restore_entry(entry)).pack(side="right", padx=(0, 6))
+            ctk.CTkButton(r, text="Usuń trwale ✕", width=95, fg_color="#991b1b", command=lambda: self._purge_entry(entry)).pack(side="right")
+
+        # 2. Nagłówek szczegółów: Tytuł, Kategoria, Akcje
+        top_header = self._plain_frame(container)
+        top_header.pack(fill="x", pady=(0, 15))
+
+        title_col = self._plain_frame(top_header)
+        title_col.pack(side="left", fill="x", expand=True)
+
+        fav_symbol = "⭐ " if entry.favorite else ""
+        icon = self._get_category_icon(entry.category)
+        self._label(title_col, text=f"{icon} {fav_symbol}{entry.title}", font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
+        self._label(title_col, text=f"Kategoria: {entry.category}", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w")
+
+        if not is_in_trash:
+            btn_actions = self._plain_frame(top_header)
+            btn_actions.pack(side="right")
+
+            ctk.CTkButton(btn_actions, text="✏️ Edytuj", width=75, fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, command=lambda: self._open_edit_entry_dialog(entry)).pack(side="left", padx=3)
+            ctk.CTkButton(btn_actions, text="📋 Duplikuj", width=80, fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, command=lambda: self._duplicate_entry(entry)).pack(side="left", padx=3)
+            ctk.CTkButton(btn_actions, text="🗑️ Do kosza", width=85, fg_color=COLOR_DANGER, command=lambda: self._delete_entry(entry)).pack(side="left", padx=3)
+
+        # 3. Specjalny wizualizator dla Kart Płatniczych
+        if "kart" in entry.category.lower() or "bank" in entry.category.lower():
+            self._render_credit_card_preview(entry, container)
+
+        # 4. Blok Loginu / Użytkownika
+        if entry.username:
+            u_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            u_card.pack(fill="x", pady=(0, 10), ipady=4)
+            u_h = self._plain_frame(u_card)
+            u_h.pack(fill="x", padx=12, pady=(6, 2))
+            self._label(u_h, text="Login / Nazwa użytkownika", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left")
+
+            u_b = self._plain_frame(u_card)
+            u_b.pack(fill="x", padx=12, pady=(0, 6))
+            self._label(u_b, text=entry.username, font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY).pack(side="left")
+            ctk.CTkButton(u_b, text="Kopiuj", width=65, height=26, fg_color=COLOR_PANEL_DARK, command=lambda: self._copy_to_clipboard(entry.username, "Login skopiowany!")).pack(side="right")
+
+        # 5. Blok Hasła
+        if entry.password:
+            p_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            p_card.pack(fill="x", pady=(0, 10), ipady=6)
+
+            p_h = self._plain_frame(p_card)
+            p_h.pack(fill="x", padx=12, pady=(6, 2))
+            self._label(p_h, text="Hasło", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left")
+
+            eval_res = evaluate_password_strength(entry.password)
+            self._label(p_h, text=f"Siła: {eval_res['label']} ({eval_res['entropy']} bitów)", font=FONT_SMALL, text_color=eval_res["color"]).pack(side="right")
+
+            p_b = self._plain_frame(p_card)
+            p_b.pack(fill="x", padx=12, pady=(2, 6))
+
+            displayed_pwd = entry.password if self._password_revealed else "•" * min(len(entry.password), 24)
+            self.pwd_display_lbl = ctk.CTkLabel(p_b, text=displayed_pwd, font=FONT_CODE if self._password_revealed else ("Consolas", 18, "bold"), text_color=COLOR_TEXT_PRIMARY)
+            self.pwd_display_lbl.pack(side="left")
+
+            p_acts = self._plain_frame(p_b)
+            p_acts.pack(side="right")
+
+            ctk.CTkButton(p_acts, text="🔒 Ukryj" if self._password_revealed else "👁 Pokaż", width=70, height=28, fg_color=COLOR_PANEL_DARK, command=lambda: self._toggle_details_password(entry.password)).pack(side="left", padx=(0, 5))
+            ctk.CTkButton(p_acts, text="Kopiuj hasło", width=95, height=28, fg_color=COLOR_PRIMARY, command=lambda: self._copy_password_safe(entry.password)).pack(side="left")
+
+            # Inline weryfikacja wycieku HIBP
+            leak_box = self._plain_frame(p_card)
+            leak_box.pack(fill="x", padx=12, pady=(4, 6))
+            leak_status_lbl = ctk.CTkLabel(leak_box, text="Weryfikacja wycieków (Have I Been Pwned - k-Anonymity):", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
+            leak_status_lbl.pack(side="left")
+
+            def _check_leak_action(pwd=entry.password, lbl=leak_status_lbl):
+                lbl.configure(text="Sprawdzanie w bazie HIBP...", text_color=COLOR_PRIMARY_LIGHT)
+
+                def _ui(res):
+                    if not lbl.winfo_exists():
+                        return
+                    is_pwned, cnt = res
+                    if is_pwned:
+                        lbl.configure(text=f"🚨 WYCIEKŁO! Znaleziono {cnt:,} razy w znanych wyciekach!", text_color=COLOR_DANGER, font=FONT_BODY_BOLD)
+                    elif cnt < 0:
+                        lbl.configure(text="⚠️ Nie udało się połączyć z HIBP (brak internetu?).", text_color=COLOR_WARNING, font=FONT_BODY_BOLD)
+                    else:
+                        lbl.configure(text="✅ Bezpieczne: Hasło NIE występuje w znanych wyciekach (HIBP).", text_color=COLOR_SUCCESS, font=FONT_BODY_BOLD)
+
+                self._run_in_background(lambda: check_password_breach_hibp(pwd), _ui)
+
+            ctk.CTkButton(leak_box, text="Sprawdź wyciek 🔍", width=120, height=24, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK, command=_check_leak_action).pack(side="right")
+
+        # 6. Blok TOTP 2FA
+        if entry.totp_secret:
+            totp_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            totp_card.pack(fill="x", pady=(0, 10), ipady=6)
+
+            t_h = self._plain_frame(totp_card)
+            t_h.pack(fill="x", padx=12, pady=(6, 2))
+            self._label(t_h, text="KOD 2FA / TOTP (Token jednorazowy)", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left")
+            self.totp_timer_label = ctk.CTkLabel(t_h, text="Wygasa za: 30s", font=FONT_SMALL, text_color=COLOR_PRIMARY_LIGHT)
+            self.totp_timer_label.pack(side="right")
+
+            t_b = self._plain_frame(totp_card)
+            t_b.pack(fill="x", padx=12, pady=(2, 6))
+
+            cur_code = get_current_totp(entry.totp_secret) or "--- ---"
+            fmt_code = f"{cur_code[:3]} {cur_code[3:]}" if len(cur_code) == 6 else cur_code
+            self.totp_code_lbl = ctk.CTkLabel(t_b, text=fmt_code, font=FONT_TOTP, text_color=COLOR_SUCCESS)
+            self.totp_code_lbl.pack(side="left")
+
+            ctk.CTkButton(t_b, text="Kopiuj kod 2FA", width=110, height=28, fg_color=COLOR_SUCCESS, command=lambda: self._copy_current_totp(entry)).pack(side="right")
+
+            self.totp_progress = ctk.CTkProgressBar(totp_card, height=4)
+            self.totp_progress.pack(fill="x", padx=12, pady=(0, 4))
+            self.totp_progress.set(get_totp_remaining_seconds() / 30.0)
+
+        # 7. URL
+        if entry.url:
+            url_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            url_card.pack(fill="x", pady=(0, 10), ipady=4)
+            u_h = self._plain_frame(url_card)
+            u_h.pack(fill="x", padx=12, pady=(6, 2))
+            self._label(u_h, text="Strona logowania / URL", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left")
+
+            u_b = self._plain_frame(url_card)
+            u_b.pack(fill="x", padx=12, pady=(0, 6))
+            self._label(u_b, text=entry.url, font=FONT_BODY, text_color=COLOR_TEXT_ACCENT).pack(side="left")
+            ctk.CTkButton(u_b, text="Otwórz stronę 🌐", width=130, height=26, fg_color=COLOR_PANEL_DARK, command=lambda: self._open_url(entry.url)).pack(side="right")
+
+        # 8. Pola niestandardowe
+        if entry.custom_fields:
+            cf_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            cf_card.pack(fill="x", pady=(0, 10), ipady=6)
+            self._label(cf_card, text="Pola niestandardowe", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=12, pady=(6, 4))
+
+            for k, v in entry.custom_fields.items():
+                row = self._plain_frame(cf_card)
+                row.pack(fill="x", padx=12, pady=2)
+                self._label(row, text=f"{k}:", font=FONT_BODY_BOLD, text_color=COLOR_TEXT_MUTED).pack(side="left")
+                self._label(row, text=str(v), font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY).pack(side="left", padx=6)
+                ctk.CTkButton(row, text="Kopiuj", width=60, height=22, fg_color=COLOR_PANEL_DARK, command=lambda val=v, name=k: self._copy_to_clipboard(str(val), f"Skopiowano {name}!")).pack(side="right")
+
+        # 9. Notatki
+        if entry.notes:
+            n_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            n_card.pack(fill="x", pady=(0, 10), ipady=6)
+            self._label(n_card, text="Bezpieczne notatki", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=12, pady=(6, 4))
+            self._label(n_card, text=entry.notes, font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, wraplength=480, justify="left").pack(anchor="w", padx=12, pady=(0, 6))
+
+        # 10. Tagi
+        if entry.tags:
+            t_box = self._plain_frame(container)
+            t_box.pack(fill="x", pady=(2, 8))
+            for t in entry.tags:
+                ctk.CTkLabel(t_box, text=f"  #{t}  ", fg_color=COLOR_PANEL_DARK, corner_radius=6, font=FONT_SMALL, text_color=COLOR_TEXT_ACCENT).pack(side="left", padx=2)
+
+    def _render_credit_card_preview(self, entry: VaultEntry, container):
+        """Generuje fotorealistyczny, nowoczesny widok karty płatniczej."""
+        card_box = ctk.CTkFrame(container, fg_color="#1e1b4b", corner_radius=14, border_width=1, border_color="#4338ca")
+        card_box.pack(fill="x", pady=(0, 15), padx=2, ipady=8)
+
+        # Górny wiersz karty (Chip i Logo)
+        top_r = self._plain_frame(card_box)
+        top_r.pack(fill="x", padx=20, pady=(12, 6))
+        self._label(top_r, text="💳 CHIP", font=FONT_CODE, text_color="#cbd5e1").pack(side="left")
+        self._label(top_r, text="VIRTUAL CARD", font=FONT_BODY_BOLD, text_color=COLOR_PRIMARY_LIGHT).pack(side="right")
+
+        # Numer karty
+        raw_num = entry.custom_fields.get("Numer karty") or entry.password or "•••• •••• •••• ••••"
+        fmt_num = " ".join([raw_num[i:i+4] for i in range(0, len(raw_num), 4)]) if len(raw_num) == 16 else raw_num
+        num_lbl = ctk.CTkLabel(card_box, text=fmt_num, font=("Consolas", 17, "bold"), text_color="#f8fafc")
+        num_lbl.pack(anchor="w", padx=20, pady=(6, 8))
+
+        # Dolny wiersz karty: Właściciel, Ważność, CVV
+        bot_r = self._plain_frame(card_box)
+        bot_r.pack(fill="x", padx=20, pady=(0, 10))
+
+        holder = entry.custom_fields.get("Właściciel karty") or entry.username or "KARTOWNIK"
+        exp = entry.custom_fields.get("Ważność") or "MM/RR"
+        cvv = entry.custom_fields.get("CVV/CVC") or "•••"
+
+        self._label(bot_r, text=f"WŁAŚCICIEL:\n{holder.upper()}", font=FONT_SMALL, text_color="#cbd5e1", justify="left").pack(side="left")
+        self._label(bot_r, text=f"WAŻNOŚĆ:\n{exp}", font=FONT_SMALL, text_color="#cbd5e1", justify="left").pack(side="left", padx=25)
+        self._label(bot_r, text=f"CVV:\n{cvv}", font=FONT_SMALL, text_color="#cbd5e1", justify="left").pack(side="left")
+
+        ctk.CTkButton(bot_r, text="Kopiuj numer", width=95, height=24, fg_color="#4338ca", command=lambda: self._copy_to_clipboard(raw_num.replace(" ", ""), "Numer karty skopiowany!")).pack(side="right")
+
+    def _copy_current_totp(self, entry: VaultEntry):
+        code = get_current_totp(entry.totp_secret)
+        if code:
+            self._copy_to_clipboard(code, "Kod 2FA skopiowany!")
+        else:
+            self.show_toast("Nieprawidłowy klucz TOTP – nie można wygenerować kodu.", error=True)
+
+    def _toggle_details_password(self, password: str):
+        self._password_revealed = not self._password_revealed
+        if hasattr(self, "pwd_display_lbl"):
+            displayed_pwd = password if self._password_revealed else "•" * min(len(password), 24)
+            self.pwd_display_lbl.configure(text=displayed_pwd, font=FONT_CODE if self._password_revealed else ("Consolas", 18, "bold"))
+
+    def _open_url(self, url: str):
+        url = url.strip()
+        # "host:port" to nie schemat – schemat to "nazwa:" bez cyfr portu po dwukropku
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)", url):
+            url = "https://" + url
+        # Tylko strony WWW – inne schematy (file:, ms-msdt:, search-ms: itp.) mogą uruchamiać programy
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            messagebox.showwarning(
+                "Zablokowano adres",
+                f"Ze względów bezpieczeństwa otwierane są tylko adresy http:// i https://.\n\n{url}"
+            )
+            return
+        webbrowser.open(url)
+
+    def _copy_password_safe(self, password: str):
+        clip_sec = effective_clipboard(int(self.vault.settings.get("clipboard_clear_seconds", 30) or 0), self.policy)
+        SecureClipboard.copy(password, timeout_seconds=clip_sec)
+        msg = f"Hasło skopiowane! (Zostanie wyczyszczone za {clip_sec}s)" if clip_sec > 0 else "Hasło skopiowane!"
+        self._show_toast(msg)
+
+    def _copy_to_clipboard(self, text: str, toast_msg: str):
+        clip_sec = effective_clipboard(int(self.vault.settings.get("clipboard_clear_seconds", 30) or 0), self.policy)
+        SecureClipboard.copy(text, timeout_seconds=clip_sec)
+        self._show_toast(toast_msg)
+
+    def show_toast(self, message: str, error: bool = False):
+        """Krótki komunikat w prawym dolnym rogu okna."""
+        toast = ctk.CTkToplevel(self)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+
+        width = 460 if error else 320
+        height = 60 if error else 45
+        x = self.winfo_rootx() + self.winfo_width() - width - 20
+        y = self.winfo_rooty() + self.winfo_height() - height - 25
+        toast.geometry(f"{width}x{height}+{x}+{y}")
+
+        card = ctk.CTkFrame(toast, fg_color=COLOR_DANGER if error else COLOR_PRIMARY, corner_radius=8)
+        card.pack(fill="both", expand=True)
+        icon = "" if error else "📋 "
+        ctk.CTkLabel(card, text=f"{icon}{message}", font=FONT_BODY_BOLD, text_color="#ffffff", wraplength=width - 30).pack(expand=True, padx=10)
+        toast.after(6000 if error else 2500, toast.destroy)
+
+    _show_toast = show_toast
+
+    def _start_totp_ticker(self):
+        rem = get_totp_remaining_seconds()
+        if hasattr(self, "totp_progress") and self.totp_progress.winfo_exists():
+            self.totp_progress.set(rem / 30.0)
+            if hasattr(self, "totp_timer_label"):
+                self.totp_timer_label.configure(text=f"Wygasa za: {rem}s")
+
+            if hasattr(self, "totp_code_lbl") and self.totp_code_lbl.winfo_exists():
+                if self.selected_entry_id:
+                    entry = self.vault.get_entry(self.selected_entry_id)
+                    if entry and entry.totp_secret and hasattr(self, "totp_code_lbl"):
+                        new_code = get_current_totp(entry.totp_secret) or "--- ---"
+                        fmt = f"{new_code[:3]} {new_code[3:]}" if len(new_code) == 6 else new_code
+                        self.totp_code_lbl.configure(text=fmt)
+
+        self._totp_timer_id = self.after(1000, self._start_totp_ticker)
+
+    def _save_vault_to_disk(self, trigger_backup: bool = True) -> bool:
+        try:
+            if self.sync_session:
+                # Tryb serwerowy: szyfrujemy tutaj, zapis lokalnej kopii i wysyłka idą w tle
+                # Migawka sejfu teraz (wątek UI), kosztowne szyfrowanie w kolejce synchronizacji – okno nie zamarza
+                data = self.vault.to_json().encode("utf-8")
+                pwd, kf = self.master_password, self.keyfile_bytes
+                future = self.sync_session.queue_save(lambda: encrypt_payload(data, pwd, kf))
+                self.count_badge.configure(text=f"({len(self.vault.entries)} wpisów)")
+                if trigger_backup and self.on_auto_backup_trigger:
+                    # Kopia zapasowa dopiero po zapisaniu lokalnej kopii
+                    def _after_save(_f, cb=self.on_auto_backup_trigger):
+                        try:
+                            self.after(0, cb)
+                        except Exception:
+                            pass
+                    future.add_done_callback(_after_save)
+                return True
+            else:
+                data = self.vault.to_json().encode("utf-8")
+                future = background_saver.submit(data, self.vault_file_path, self.master_password, self.keyfile_bytes)
+                self.count_badge.configure(text=f"({len(self.vault.entries)} wpisów)")
+
+                def _local_done(f, backup=trigger_backup and self.on_auto_backup_trigger):
+                    error = f.exception()
+                    if error is None and not (backup and f.result()):
+                        return
+
+                    def _ui():
+                        if error is not None:
+                            messagebox.showerror(
+                                "Błąd zapisu sejfu",
+                                f"Nie udało się zapisać sejfu na dysku:\n{error}\n\n"
+                                "Zmiany są tylko w pamięci – spróbuj ponownie przed zamknięciem aplikacji.")
+                        else:
+                            backup()  # kopia zapasowa dopiero, gdy plik jest już na dysku
+                    try:
+                        self.after(0, _ui)
+                    except Exception:
+                        pass
+                future.add_done_callback(_local_done)
+                return True
+        except Exception as e:
+            messagebox.showerror(
+                "Błąd zapisu sejfu",
+                f"Nie udało się zapisać sejfu na dysku:\n{e}\n\n"
+                "Zmiany są tylko w pamięci – spróbuj ponownie przed zamknięciem aplikacji."
+            )
+            return False
+        self.count_badge.configure(text=f"({len(self.vault.entries)} wpisów)")
+        if trigger_backup and self.on_auto_backup_trigger:
+            self.on_auto_backup_trigger()
+        return True
+
+    # ----------------- OPERACJE NA WPISACH (KOSZ / DUPLIKACJA) -----------------
+    def _delete_entry(self, entry: VaultEntry):
+        if messagebox.askyesno("Przenieś do kosza", f"Czy przenieść wpis '{entry.title}' do kosza?"):
+            self.vault.delete_entry(entry.id)
+            self._save_vault_to_disk()
+            self.selected_entry_id = None
+            self._build_sidebar()
+            self._refresh_entries_list()
+            self._show_empty_details()
+
+    def _restore_entry(self, entry: VaultEntry):
+        self.vault.restore_from_trash(entry.id)
+        self._save_vault_to_disk()
+        self._build_sidebar()
+        self._refresh_entries_list()
+        self._render_entry_details(entry.id)
+
+    def _purge_entry(self, entry: VaultEntry):
+        if messagebox.askyesno("Trwałe usunięcie", f"Czy na pewno trwale usunąć wpis '{entry.title}'? Tej operacji nie można cofnąć."):
+            self.vault.empty_trash(entry.id)
+            self._save_vault_to_disk()
+            self.selected_entry_id = None
+            self._build_sidebar()
+            self._refresh_entries_list()
+            self._show_empty_details()
+
+    def _duplicate_entry(self, entry: VaultEntry):
+        dup = VaultEntry(
+            title=f"{entry.title} (Kopia)",
+            category=entry.category,
+            username=entry.username,
+            password=entry.password,
+            url=entry.url,
+            totp_secret=entry.totp_secret,
+            notes=entry.notes,
+            tags=list(entry.tags),
+            custom_fields=dict(entry.custom_fields),
+            favorite=entry.favorite
+        )
+        self.vault.add_entry(dup)
+        self._save_vault_to_disk()
+        self._build_sidebar()
+        self._select_entry(dup.id)
+
+    # ----------------- WYSKIWANIE BOCZNYCH PANELI (DRAWER) -----------------
+    def _open_new_entry_dialog(self):
+        container = self.drawer.open("Nowy Wpis", "Wprowadź dane nowego konta lub usługi")
+        def _on_save(new_entry):
+            self.vault.add_entry(new_entry)
+            self.vault.add_category(new_entry.category)
+            self._save_vault_to_disk()
+            self.drawer.close()
+            self._build_sidebar()
+            self._select_entry(new_entry.id)
+
+        EntryDrawerView(
+            container,
+            categories=self.vault.categories,
+            entry=None,
+            on_save=_on_save,
+            on_cancel=self.drawer.close
+        )
+
+    def _open_edit_entry_dialog(self, entry: VaultEntry):
+        container = self.drawer.open(f"Edycja: {entry.title}", "Zaktualizuj hasło lub dane wpisu")
+        def _on_save(saved_entry):
+            self.vault.add_category(saved_entry.category)
+            self._save_vault_to_disk()
+            self.drawer.close()
+            self._build_sidebar()
+            self._select_entry(saved_entry.id)
+
+        EntryDrawerView(
+            container,
+            categories=self.vault.categories,
+            entry=entry,
+            on_save=_on_save,
+            on_cancel=self.drawer.close
+        )
+
+    def _open_generator_dialog(self):
+        container = self.drawer.open("Generator Haseł i Passphrase", "Generowanie silnych, losowych haseł oraz fraz Diceware")
+        GeneratorDrawerView(container)
+
+    def _open_audit_dialog(self):
+        container = self.drawer.open("Centrum Audytu Bezpieczeństwa", "Monitor wycieków Have I Been Pwned i higiena haseł")
+        def _fix_entry(eid):
+            entry = self.vault.get_entry(eid)
+            if entry:
+                self._open_edit_entry_dialog(entry)
+
+        AuditDrawerView(container, vault=self.vault, on_fix_entry=_fix_entry, on_report=self.on_audit_report)
+
+    def _open_backup_dialog(self):
+        if not personal_backups_allowed(self.policy):
+            messagebox.showinfo(
+                "Kopie zarządzane przez firmę",
+                "Administrator wyłączył własne kopie sejfu (USB, prywatne chmury).\n\n"
+                "Twój sejf jest bezpiecznie przechowywany na serwerze firmy razem z historią wersji – "
+                "w razie potrzeby administrator może przywrócić wcześniejszą wersję."
+            )
+            return
+        container = self.drawer.open("Centrum Kopii Zapasowych i Chmury", "Konfiguracja kopii na WebDAV, Google Drive, OneDrive lub USB")
+        BackupDrawerView(
+            container,
+            vault=self.vault,
+            vault_file_path=self.vault_file_path,
+            on_saved=lambda: self._save_vault_to_disk(trigger_backup=False)
+        )
+
+    def open_import_dialog(self):
+        self._open_import_dialog()
+
+    def _open_import_dialog(self):
+        container = self.drawer.open("Kreator Importu", "Przenieś hasła z Bitwarden, KeePass, 1Password lub Chrome")
+        def _on_done(count):
+            self._save_vault_to_disk()
+            self.drawer.close()
+            self._build_sidebar()
+            self._refresh_entries_list()
+            if self.selected_entry_id:
+                self._render_entry_details(self.selected_entry_id)
+            else:
+                self._show_empty_details()
+
+        ImportDrawerView(container, vault=self.vault, on_done=_on_done)
+
+    def _open_settings_dialog(self):
+        container = self.drawer.open("Ustawienia Sejfu", "Zarządzanie czasem blokady, schowkiem i hasłem głównym")
+        def _pwd_changed(new_pwd):
+            self.master_password = new_pwd
+            if self.sync_session:
+                self.sync_session.update_credentials(new_pwd, self.keyfile_bytes)
+            if self.on_master_password_changed:
+                self.on_master_password_changed(new_pwd)
+
+        def _save_with_new_password(new_pwd):
+            # Tryb serwerowy: nowa wersja (zaszyfrowana nowym hasłem) idzie przez kolejkę synchronizacji
+            _pwd_changed(new_pwd)
+            if not self._save_vault_to_disk():
+                raise OSError("Nie udało się zapisać sejfu.")
+
+        SettingsDrawerView(
+            container,
+            vault=self.vault,
+            current_password=self.master_password,
+            vault_file_path=self.vault_file_path,
+            keyfile_bytes=self.keyfile_bytes,
+            on_pwd_changed=_pwd_changed,
+            on_saved=self._save_vault_to_disk,
+            password_saver=_save_with_new_password if self.sync_session else None,
+            policy=self.policy
+        )
+
+    # ----------------- SYNCHRONIZACJA Z SERWEREM -----------------
+    # stan → (ikona, tekst, tło, kolor tekstu)
+    SYNC_LOOK = {
+        "synced": ("☁", "Zsynchronizowano", COLOR_CARD_DARK, COLOR_SUCCESS),
+        "syncing": ("⟳", "Synchronizacja...", COLOR_CARD_DARK, COLOR_PRIMARY_LIGHT),
+        "pending": ("⟳", "Zapisywanie...", COLOR_CARD_DARK, COLOR_PRIMARY_LIGHT),
+        "offline": ("⚠", "Offline", COLOR_CARD_DARK, COLOR_WARNING),
+        "conflict": ("⚠", "Konflikt – kliknij", COLOR_DANGER, "#ffffff"),
+        "error": ("⚠", "Wymaga uwagi", COLOR_DANGER, "#ffffff"),
+    }
+
+    def update_sync_status(self, status):
+        """Aktualizuje wskaźnik synchronizacji (wywoływane przy każdej zmianie stanu)."""
+        if not self.sync_btn or not self.sync_btn.winfo_exists():
+            return
+        self._last_sync_status = status
+        icon, label, bg, fg = self.SYNC_LOOK.get(status.state, ("☁", "Serwer", COLOR_CARD_DARK, COLOR_TEXT_PRIMARY))
+        self.sync_btn.configure(text=icon if self._is_compact_sidebar else f"{icon}  {label}", fg_color=bg, text_color=fg)
+
+        previous, self._last_sync_state = self._last_sync_state, status.state
+        if status.state != previous and status.state in ("conflict", "error"):
+            self.show_toast(status.message, error=True)
+
+    def apply_remote_vault(self, vault: Vault, message: str = ""):
+        """Wczytuje nowszą wersję sejfu pobraną z serwera (zmiany z innego urządzenia)."""
+        if self.drawer.is_open:
+            # Nie podmieniamy danych pod otwartym formularzem – wczytamy po zamknięciu panelu
+            self._pending_remote_vault = (vault, message)
+            self.after(1500, self._apply_pending_remote_vault)
+            return
+        self.vault = vault
+        if self.on_vault_replaced:
+            self.on_vault_replaced(vault)
+        if self.selected_entry_id and not vault.get_entry(self.selected_entry_id):
+            self.selected_entry_id = None
+        self.vault_title_lbl.configure(text=f"🛡️ {vault.name}")
+        self.count_badge.configure(text=f"({len(vault.entries)} wpisów)")
+        self._build_sidebar()
+        self._refresh_entries_list()
+        if self.selected_entry_id:
+            self._render_entry_details(self.selected_entry_id)
+        elif self.trash_mode:
+            self._show_trash_header_in_details()
+        else:
+            self._show_empty_details()
+        if message:
+            self.show_toast(message)
+
+    def apply_branding(self, company: str, logo_path: str = ""):
+        """Nazwa i logo firmy (z serwera) na górze bocznego menu."""
+        if getattr(self, "company_box", None) is not None and self.company_box.winfo_exists():
+            self.company_box.destroy()
+        self.company_box = None
+        if not company and not logo_path:
+            return
+        box = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        image = None
+        if logo_path:
+            try:
+                from PIL import Image
+                img = Image.open(logo_path)
+                img.thumbnail((180, 40))
+                image = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            except Exception:
+                image = None
+        if image is not None:
+            ctk.CTkLabel(box, text="", image=image).pack(pady=(10, 2))
+        if company and not self._is_compact_sidebar:
+            ctk.CTkLabel(box, text=company, font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY,
+                         wraplength=190, justify="center").pack(pady=(4 if image else 10, 0), padx=6)
+        first = self.sync_btn if self.sync_btn is not None else self.sidebar_body
+        box.pack(fill="x", before=first)
+        self.company_box = box
+        self._company = (company, logo_path)
+
+    def open_settings_for_password_change(self):
+        """Polityka firmy wymaga zmiany hasła głównego – otwórz ustawienia z sekcją zmiany hasła."""
+        self._open_settings_dialog()
+
+    def _apply_pending_remote_vault(self):
+        if self._pending_remote_vault and not self.drawer.is_open:
+            vault, message = self._pending_remote_vault
+            self._pending_remote_vault = None
+            self.apply_remote_vault(vault, message)
+        elif self._pending_remote_vault:
+            self.after(1500, self._apply_pending_remote_vault)
+
+    def _open_sync_dialog(self):
+        if not self.sync_session:
+            return
+        container = self.drawer.open("Synchronizacja z serwerem", "Stan sejfu na serwerze, konflikty i historia wersji")
+        SyncDrawerView(
+            container,
+            session=self.sync_session,
+            on_vault_replaced=lambda v, msg: self._replace_vault_from_sync(v, msg),
+            on_sync_now=self.on_sync_requested
+        )
+
+    def _replace_vault_from_sync(self, vault: Vault, message: str):
+        """Wynik rozwiązania konfliktu / przywrócenia wersji – zamyka panel i wczytuje sejf."""
+        self.drawer.close()
+        self._pending_remote_vault = (vault, message)
+        self.after(400, self._apply_pending_remote_vault)
+
+    def _lock_vault(self):
+        if self._totp_timer_id:
+            try:
+                self.after_cancel(self._totp_timer_id)
+            except Exception:
+                pass
+        SecureClipboard.clear()
+        if self.on_lock_requested:
+            self.on_lock_requested()
