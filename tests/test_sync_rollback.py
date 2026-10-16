@@ -107,6 +107,22 @@ class TestRollbackProtection(unittest.TestCase):
         self.assertEqual(self.titles(vault), ["stare hasło (wyciekło)"])
         self.assertGreater(vault.revision, 2)  # inne urządzenia przyjmą ją jako zwykłą zmianę
 
+    def test_login_after_password_change_on_other_device(self):
+        """Lokalna kopia zaszyfrowana starym hasłem nie może blokować logowania nowym hasłem."""
+        self.session.open(PASSWORD)  # kopia lokalna – stare hasło, revision 2
+        vault = Vault("Test")
+        vault.revision = 3
+        vault.add_entry(VaultEntry(title="po zmianie hasła", password="x"))
+        self.client.publish(encrypt_payload(vault.to_json().encode(), "NOWE-haslo-456"))
+        again = SyncSession(ServerProfile(url="https://s", token="t", cache_dir=self.tmp, server_id="srv1"),
+                            client=self.client)
+        try:
+            opened = again.open("NOWE-haslo-456")
+            self.assertEqual(self.titles(opened), ["po zmianie hasła"])
+            self.assertEqual(again.state, SYNCED)
+        finally:
+            again.close()
+
     def test_revision_survives_roundtrip(self):
         v = Vault("x")
         v.revision = 7

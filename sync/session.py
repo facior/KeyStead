@@ -22,7 +22,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from core.crypto import CryptoError, compute_sha256, seal
+from core.crypto import CryptoError, InvalidPasswordOrCorruptDataError, compute_sha256, seal
 from core.storage import vault_from_blob, write_encrypted_file
 from core.vault import Vault
 from sync.client import AuthError, ConflictError, NetworkError, RemoteVaultClient, SyncError
@@ -244,6 +244,17 @@ class SyncSession:
         with open(self.cache_path, "rb") as f:
             return f.read()
 
+    @property
+    def unsent_copy_path(self) -> str:
+        return self.cache_path[:-len(".vault")] + " - niewysłane zmiany.vault"
+
+    def _keep_unsent_copy(self) -> None:
+        """Lokalna kopia z niewysłanymi zmianami, której nie da się otworzyć bieżącym hasłem – zostaje jako osobny plik."""
+        try:
+            write_encrypted_file(self.unsent_copy_path, self._read_cache())
+        except OSError:
+            pass
+
     # ------------------------------------------------------------ odebranie dostępu
     def wipe_local_data(self) -> None:
         """Usuwa z dysku lokalną (zaszyfrowaną) kopię sejfu i stan synchronizacji tego serwera."""
@@ -314,9 +325,16 @@ class SyncSession:
             return vault
 
         if has_cache and self.pending and remote["version"] > self.base_version:
-            vault = self._decrypt(self._read_cache())
-            self._set(CONFLICT, f"Sejf zmieniono na urządzeniu „{remote.get('updated_by')}”, a tu są niewysłane zmiany")
-            return vault
+            try:
+                vault = self._decrypt(self._read_cache())
+            except InvalidPasswordOrCorruptDataError:
+                # Hasło pasuje do nowej wersji z serwera, a nie do lokalnej kopii (np. administrator zresetował hasło).
+                # Niewysłane zmiany zostają w osobnym pliku – do otwarcia poprzednim hasłem.
+                self._keep_unsent_copy()
+                vault = None
+            if vault is not None:
+                self._set(CONFLICT, f"Sejf zmieniono na urządzeniu „{remote.get('updated_by')}”, a tu są niewysłane zmiany")
+                return vault
 
         if has_cache and remote["version"] < self.base_version:
             vault = self._decrypt(self._read_cache())
@@ -326,10 +344,14 @@ class SyncSession:
 
         blob, version = self.client.download()
         vault = self._decrypt(blob)  # najpierw weryfikacja hasła, potem nadpisanie lokalnej kopii
-        if has_cache:
-            cached = self._decrypt(self._read_cache())
-            self._seen_revision(cached.revision)
-            if self._is_rollback(vault):
+        if has_cache and self._is_rollback(vault):
+            # Licznik zapamiętany w stanie synchronizacji. Lokalną kopię otwieramy tylko w tym przypadku –
+            # i tylko jeśli się da (mogła zostać zaszyfrowana poprzednim hasłem głównym).
+            try:
+                cached = self._decrypt(self._read_cache())
+            except Exception:
+                cached = None
+            if cached is not None:
                 self._set(ERROR, self.ROLLBACK_MESSAGE)
                 return cached  # pracujemy na własnej, nowszej kopii
         write_encrypted_file(self.cache_path, blob)
