@@ -39,6 +39,7 @@ from ui.login_view import LoginView, save_recent_vault
 from ui.main_view import MainView
 from ui.onboarding_wizard import OnboardingWizard, is_first_run
 from ui.recovery_ui import FORCE_CHANGE_KEY, AdminRecoveryTools, PasswordPrompt, RecoveryCodeDialog
+from ui.site_icons_ui import IconProvider
 
 
 SYNC_POLL_SECONDS = 30
@@ -146,6 +147,7 @@ class PasswordManagerApp(ctk.CTk):
         self._branding_key = None
         self._ui_queue: "queue.Queue" = queue.Queue()
         self.after(40, self._drain_ui_queue)
+        self.icon_provider = IconProvider(self)  # ikony stron przy wpisach (pobierane bezpośrednio ze stron)
         cleanup_temp_copies()  # pozostałości po nieoczekiwanym zamknięciu (np. awaria zasilania)
 
         # Śledzenie aktywności użytkownika w celu automatycznej blokady
@@ -779,6 +781,13 @@ class PasswordManagerApp(ctk.CTk):
                                    "Ustaw teraz własne hasło główne (znasz je tylko Ty).")
             view.open_settings_for_password_change()
 
+    def _icons_setting_changed(self):
+        view = self._current_view
+        if isinstance(view, MainView):
+            view._refresh_entries_list()
+            if view.selected_entry_id:
+                view._render_entry_details(view.selected_entry_id)
+
     def security_options(self) -> dict:
         """Dane dla kart „Windows Hello i skróty” oraz „Odzyskiwanie dostępu” w Ustawieniach."""
         target = self.quick_unlock_target()
@@ -801,6 +810,7 @@ class PasswordManagerApp(ctk.CTk):
             "hotkeys_registered": dict(self.quick_access.registered),
             "on_hotkeys_save": self.quick_access.apply_prefs,
             "autotype_allowed": self.autotype_allowed(),
+            "on_icons_changed": self._icons_setting_changed,
         }
 
     def _trigger_background_backup(self):

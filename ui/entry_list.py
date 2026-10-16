@@ -22,10 +22,18 @@ ROW_RADIUS = 8
 PAD_X = 10
 
 
+AVATAR = 28  # kafelek z ikoną strony / literą
+
+
 class EntryList(ctk.CTkFrame):
-    def __init__(self, master, bg: str, on_select: Callable[[str], None]):
+    def __init__(self, master, bg: str, on_select: Callable[[str], None], icon_provider=None):
         super().__init__(master, fg_color="transparent")
         self.on_select = on_select
+        self.icons = icon_provider
+        self._icon_refs = []  # obrazy Tk muszą mieć referencję, inaczej znikają
+        self._redraw_job = None
+        if self.icons is not None:
+            self.icons.add_listener(self._on_icon_loaded)
         self.items: List[Dict[str, str]] = []
         self.selected_id: Optional[str] = None
         self._hover_index: Optional[int] = None
@@ -128,6 +136,7 @@ class EntryList(ctk.CTkFrame):
         c = self.canvas
         c.delete("all")
         self._rects = {}
+        self._icon_refs = []
         width = max(c.winfo_width(), 50)
         self._last_width = width
         if not self.items:
@@ -151,18 +160,46 @@ class EntryList(ctk.CTkFrame):
         first = max(0, int(top // step) - 3)
         last = min(len(self.items), int((top + height) // step) + 4)
         x0, x1 = 2, self._last_width - 2
-        text_w = x1 - x0 - 2 * self.pad
+        av = int(AVATAR * self.s)
+        has_avatars = any("avatar" in it for it in self.items[first:last])
+        text_x = x0 + self.pad + (av + self.pad if has_avatars else 0)
+        text_w = x1 - text_x - self.pad
         for i in range(first, last):
             if i in self._rects:
                 continue
             it = self.items[i]
             y = self._row_top(i)
             self._rects[i] = self._rounded_rect(x0, y, x1, y + self.row_h, self.radius, width=1)
-            c.create_text(x0 + self.pad, y + int(self.row_h * 0.33), anchor="w", fill=COLOR_TEXT_PRIMARY,
+            if "avatar" in it:
+                self._draw_avatar(it, x0 + self.pad, y + (self.row_h - av) // 2, av)
+            c.create_text(text_x, y + int(self.row_h * 0.33), anchor="w", fill=COLOR_TEXT_PRIMARY,
                           font=self.font_title, text=self._fit(it["title"], self.font_title, text_w))
-            c.create_text(x0 + self.pad, y + int(self.row_h * 0.70), anchor="w", fill=COLOR_TEXT_MUTED,
+            c.create_text(text_x, y + int(self.row_h * 0.70), anchor="w", fill=COLOR_TEXT_MUTED,
                           font=self.font_sub, text=self._fit(it["subtitle"], self.font_sub, text_w))
             self._paint_row(i)
+
+    def _draw_avatar(self, it: Dict[str, str], x: int, y: int, size: int) -> None:
+        """Ikona strony albo kolorowy kafelek z literą / ikoną kategorii."""
+        photo = self.icons.image(it.get("domain"), size) if self.icons is not None else None
+        if photo is not None:
+            self._icon_refs.append(photo)
+            self.canvas.create_image(x, y, image=photo, anchor="nw")
+            return
+        self._rounded_rect(x, y, x + size, y + size, max(4, size // 4), fill=it.get("color", "#4f46e5"),
+                           outline="")
+        self.canvas.create_text(x + size / 2, y + size / 2, text=it["avatar"], fill="#ffffff", font=self.font_title)
+
+    def _on_icon_loaded(self, domain: str) -> None:
+        # Ikona pobrana w tle – przerysowanie wierszy (zbiorczo, jeśli przychodzi ich kilka naraz)
+        if not any(it.get("domain") == domain for it in self.items):
+            return
+        if self._redraw_job is None:
+            self._redraw_job = self.after(120, self._flush_redraw)
+
+    def _flush_redraw(self) -> None:
+        self._redraw_job = None
+        if self.winfo_exists():
+            self._redraw()
 
     def _paint_row(self, i: int) -> None:
         if i not in self._rects:
@@ -253,4 +290,9 @@ class EntryList(ctk.CTkFrame):
 
     def destroy(self):
         self._stop_scroll_animation()
+        if self.icons is not None:
+            self.icons.remove_listener(self._on_icon_loaded)
+        if self._redraw_job is not None:
+            self.after_cancel(self._redraw_job)
+            self._redraw_job = None
         super().destroy()

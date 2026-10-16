@@ -1204,7 +1204,19 @@ class SettingsDrawerView(ctk.CTkFrame):
         self.session_lock_sw = ctk.CTkSwitch(c1, text="Blokuj sejf razem z komputerem (Win+L, wylogowanie)")
         if self.vault.settings.get("lock_on_session_lock", True):
             self.session_lock_sw.select()
-        self.session_lock_sw.pack(anchor="w", padx=15, pady=(0, 10))
+        self.session_lock_sw.pack(anchor="w", padx=15, pady=(0, 8))
+
+        self.icons_sw = ctk.CTkSwitch(c1, text="Pokazuj ikony stron przy wpisach")
+        if self.vault.settings.get("site_icons", True):
+            self.icons_sw.select()
+        icons_blocked = (self.policy or {}).get("allow_site_icons", True) is False
+        if icons_blocked:
+            self.icons_sw.configure(state="disabled")
+        self.icons_sw.pack(anchor="w", padx=15, pady=(0, 2))
+        ctk.CTkLabel(c1, text=("Wyłączone przez politykę firmy." if icons_blocked else
+                               "Ikony są pobierane bezpośrednio ze stron (jak w przeglądarce) – bez pośredników, "
+                               "którzy poznaliby listę Twoich kont. Adresy z sieci lokalnej są pomijane."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=440, justify="left").pack(anchor="w", padx=15, pady=(0, 10))
 
         if self.security:
             self._build_security_card(scroll)
@@ -1318,6 +1330,8 @@ class SettingsDrawerView(ctk.CTkFrame):
         self.vault.settings["auto_lock_minutes"] = dict(self._lock_choices).get(self.lock_cb.get(), self._lock_choices[0][1])
         self.vault.settings["clipboard_clear_seconds"] = dict(self._clip_choices).get(self.clip_cb.get(), self._clip_choices[0][1])
         self.vault.settings["lock_on_session_lock"] = bool(self.session_lock_sw.get())
+        icons_changed = bool(self.icons_sw.get()) != bool(self.vault.settings.get("site_icons", True))
+        self.vault.settings["site_icons"] = bool(self.icons_sw.get())
         if self.security.get("on_hotkeys_save"):
             prefs = {"enabled": bool(self.hotkeys_sw.get()),
                      **{k: e.get().strip() for k, e in self._hotkey_entries.items()}}
@@ -1332,6 +1346,8 @@ class SettingsDrawerView(ctk.CTkFrame):
                                                            "wybierz inną kombinację klawiszy.")
         if self.on_saved:
             self.on_saved()
+        if icons_changed and self.security.get("on_icons_changed"):
+            self.security["on_icons_changed"]()
         messagebox.showinfo("Zapisano", "Ustawienia zostały zapisane.")
 
     def _change_pwd(self):

@@ -36,6 +36,8 @@ from ui.policy import effective_clipboard, personal_backups_allowed
 from ui.drawer import SlidingDrawer
 from ui.entry_list import EntryList
 from core.watchtower import attention_count
+from core.site_icons import site_domain
+from ui.site_icons_ui import avatar_for
 from ui import perf
 
 perf.apply()
@@ -422,7 +424,9 @@ class MainView(ctk.CTkFrame):
         self.list_title_lbl = ctk.CTkLabel(list_header, text="Wszystkie wpisy", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY)
         self.list_title_lbl.pack(side="left")
 
-        self.entry_list = EntryList(self.entries_list_frame, bg=COLOR_PANEL_DARK, on_select=self._select_entry)
+        self.icon_provider = getattr(self.winfo_toplevel(), "icon_provider", None)
+        self.entry_list = EntryList(self.entries_list_frame, bg=COLOR_PANEL_DARK, on_select=self._select_entry,
+                                    icon_provider=self.icon_provider)
         self.entry_list.pack(fill="both", expand=True, padx=6, pady=(0, 10))
 
         # 2.3 Szczegóły wpisu (Right Detail View)
@@ -671,9 +675,11 @@ class MainView(ctk.CTkFrame):
                 title_text += f" [#{self.selected_tag}]"
             self.list_title_lbl.configure(text=f"{title_text} ({len(results)})")
 
-        items = [{"id": e.id,
-                  "title": f"{self._get_category_icon(e.category)} {e.title}{' ⭐' if e.favorite else ''}",
-                  "subtitle": e.username or e.category} for e in results]
+        items = []
+        for e in results:
+            domain, avatar, color = avatar_for(e.title, e.url, self._get_category_icon(e.category) if not e.url else "")
+            items.append({"id": e.id, "title": f"{e.title}{' ⭐' if e.favorite else ''}",
+                          "subtitle": e.username or e.category, "domain": domain, "avatar": avatar, "color": color})
         empty = "Kosz jest pusty." if self.trash_mode else "Brak wpisów spełniających kryteria."
         self.entry_list.selected_id = self.selected_entry_id
         self.entry_list.set_items(items, empty_text=empty, keep_scroll=keep_scroll)
@@ -817,7 +823,15 @@ class MainView(ctk.CTkFrame):
 
         fav_symbol = "⭐ " if entry.favorite else ""
         icon = self._get_category_icon(entry.category)
-        self._label(title_col, text=f"{icon} {fav_symbol}{entry.title}", font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
+        site_icon = self.icon_provider.image(site_domain(entry.url), int(30 * self._get_widget_scaling())) \
+            if self.icon_provider is not None and entry.url else None
+        title_lbl = self._label(title_col, text=f"{'' if site_icon else icon + ' '}{fav_symbol}{entry.title}",
+                                font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w")
+        if site_icon is not None:
+            title_lbl.configure(image=site_icon, compound="left", padx=0)
+            title_lbl.image = site_icon  # referencja – inaczej obraz znika
+            title_lbl.configure(text="  " + title_lbl.cget("text"))
+        title_lbl.pack(anchor="w")
         self._label(title_col, text=f"Kategoria: {entry.category}", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w")
 
         if not is_in_trash:

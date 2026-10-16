@@ -23,6 +23,7 @@ from core.paths import APP_DIR
 from core.totp_service import get_current_totp
 from core.vault import Vault, VaultEntry
 from ui.entry_list import EntryList
+from ui.site_icons_ui import avatar_for
 from ui.theme import (COLOR_BORDER, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_TEXT_MUTED, FONT_BODY, FONT_SMALL,
                       FONT_SUBTITLE)
 
@@ -184,7 +185,8 @@ class QuickSearchPopup(ctk.CTkToplevel):
         self.entry.pack(fill="x", padx=14)
         if query:
             self.entry.insert(0, query)
-        self.list = EntryList(frame, bg=COLOR_PANEL_DARK, on_select=self._clicked)
+        self.list = EntryList(frame, bg=COLOR_PANEL_DARK, on_select=self._clicked,
+                              icon_provider=getattr(master, "icon_provider", None))
         self.list.pack(fill="both", expand=True, padx=8, pady=8)
         hint = ("Enter – wpisz w okno  ·  ↑↓ – wybór  ·  Esc – zamknij" if mode == "autotype" else
                 "Enter – kopiuj hasło  ·  Shift+Enter – login  ·  Ctrl+Enter – kod 2FA  ·  Esc – zamknij")
@@ -234,8 +236,12 @@ class QuickSearchPopup(ctk.CTkToplevel):
         results = self.vault.search(query=query) if query else sorted(
             self.vault.entries.values(), key=lambda e: (not e.favorite, e.title.lower()))
         results = results[:200]
-        items = [{"id": e.id, "title": f"{'⭐ ' if e.favorite else ''}{e.title}",
-                  "subtitle": e.username or e.url or e.category} for e in results]
+        items = []
+        for e in results:
+            domain, avatar, color = avatar_for(e.title, e.url)
+            items.append({"id": e.id, "title": f"{'⭐ ' if e.favorite else ''}{e.title}",
+                          "subtitle": e.username or e.url or e.category, "domain": domain, "avatar": avatar,
+                          "color": color})
         self.list.set_items(items, empty_text="Brak pasujących wpisów.")
         if items:
             self.list.set_selected(items[0]["id"])
