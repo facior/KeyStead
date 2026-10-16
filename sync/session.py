@@ -22,7 +22,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from core.crypto import CryptoError, compute_sha256, encrypt_payload
+from core.crypto import CryptoError, compute_sha256, seal
 from core.storage import vault_from_blob, write_encrypted_file
 from core.vault import Vault
 from sync.client import AuthError, ConflictError, NetworkError, RemoteVaultClient, SyncError
@@ -59,6 +59,16 @@ def read_cached_branding(profile: ServerProfile) -> Dict[str, Any]:
     try:
         with open(profile.cache_path() + ".sync.json", "r", encoding="utf-8") as f:
             return json.load(f).get("branding") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def read_cached_policy(profile: ServerProfile) -> Dict[str, Any]:
+    """Polityki firmy zapamiętane przy ostatniej synchronizacji (np. czy wolno używać Windows Hello)."""
+    try:
+        with open(profile.cache_path() + ".sync.json", "r", encoding="utf-8") as f:
+            policy = json.load(f).get("policy")
+            return policy if isinstance(policy, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -511,7 +521,7 @@ class SyncSession:
         vault = self._decrypt(blob)
         # Przywrócona treść dostaje nowy, najwyższy licznik – inne urządzenia przyjmą ją jako zwykłą zmianę
         vault.revision = self.next_revision(vault.revision)
-        blob = encrypt_payload(vault.to_json().encode("utf-8"), self._password, self._keyfile)
+        blob = seal(vault.to_json().encode("utf-8"), self._password, self._keyfile, vault.keyring)
         self._seen_revision(vault.revision)
         info = self.client.meta()
         base = info["meta"]["version"] if info.get("meta") else 0

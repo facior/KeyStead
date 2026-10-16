@@ -6,3 +6,10 @@ pyotp>=2.9.0
 requests>=2.31.0
 pyperclip>=1.8.2
 pillow>=10.0.0
+# Windows Hello (szybkie odblokowanie) – tylko Windows
+winrt-runtime>=3.2.1; sys_platform == "win32"
+winrt-Windows.Foundation>=3.2.1; sys_platform == "win32"
+winrt-Windows.Security.Credentials>=3.2.1; sys_platform == "win32"
+winrt-Windows.Security.Credentials.UI>=3.2.1; sys_platform == "win32"
+winrt-Windows.Security.Cryptography>=3.2.1; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=3.2.1; sys_platform == "win32"

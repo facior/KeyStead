@@ -21,7 +21,12 @@ from core.crypto import (
 )
 from sync import EmptyServerError, ServerProfile, SyncSession, delete_profile, load_profile, save_profile
 from sync.client import AuthError, CertificateError, TotpRequiredError, check_server_url, enroll_device
-from sync.session import read_cached_branding
+from sync.session import read_cached_branding, read_cached_policy
+from ui.quick_unlock_ui import file_target, quick, server_target
+from ui.recovery_ui import NewPasswordDialog, PasswordPrompt
+from core.crypto import seal, unseal_with_recovery_code
+from core.storage import write_encrypted_file
+from sync.client import RemoteVaultClient
 from core.paths import branding_logo_path
 from core.version import APP_VERSION
 from ui.totp_dialog import TotpDialog
@@ -36,6 +41,15 @@ from ui.theme import (
 
 
 RECENT_VAULTS_CONFIG = RECENT_VAULTS_FILE
+_AUTO_PROMPTED = False  # automatyczne pytanie o Windows Hello tylko raz – przy starcie aplikacji
+
+
+def _safe(fn):
+    """Wynik albo wyjątek (dla pracy w wątku tła – błąd trafia do interfejsu zamiast ginąć)."""
+    try:
+        return fn()
+    except Exception as e:
+        return e
 
 
 def load_recent_vaults() -> List[str]:
@@ -81,8 +95,11 @@ class LoginView(ctk.CTkFrame):
         self._enroll_totp = ""           # kod 2FA do ponowienia dołączenia urządzenia
         self._pending_totp_setup = None  # konfiguracja 2FA zwrócona przez serwer przy pierwszym urządzeniu
         self._logo_image = None
+        self.unlock_method = "password"  # „hello”, gdy sejf odblokowano przez Windows Hello
 
         self._build_ui()
+        # Dostępność Windows Hello sprawdzana w tle; przyciski pojawiają się, gdy jest zapisane odblokowanie
+        quick.check_availability(lambda _ok: self._refresh_hello_buttons(auto=True), widget=self)
 
     def _build_ui(self):
         # Wycentrowana karta logowania
@@ -196,6 +213,164 @@ class LoginView(ctk.CTkFrame):
         )
         self.unlock_btn.pack(fill="x", pady=(10, 0))
 
+        self.hello_local_btn = ctk.CTkButton(
+            f, text="🔐 Odblokuj przez Windows Hello", height=34, fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER, command=self._hello_local
+        )
+        self.unlock_file_entry.bind("<FocusOut>", lambda e: self._refresh_hello_buttons())
+        ctk.CTkButton(f, text="Nie pamiętam hasła", height=22, font=FONT_SMALL, fg_color="transparent",
+                      hover_color=COLOR_CARD_HOVER, text_color=COLOR_TEXT_MUTED,
+                      command=lambda: self._forgot_password("local")).pack(side="bottom", anchor="e", pady=(6, 0))
+
+    # ------------------------------------------------------------- odzyskiwanie dostępu (kod odzyskiwania)
+    def _forgot_password(self, mode: str):
+        self.error_label.configure(text="", text_color=COLOR_DANGER)
+        if mode == "local":
+            path = self.unlock_file_entry.get().strip()
+            if not path or not os.path.isfile(path):
+                self.error_label.configure(text="Najpierw wskaż plik sejfu, do którego chcesz odzyskać dostęp.")
+                return
+            client = None
+        else:
+            profile = self.server_profile
+            if not profile or not profile.token:
+                self.error_label.configure(text="Ten komputer nie jest połączony z serwerem – poproś administratora "
+                                                "o odzyskanie dostępu lub użyj kodu odzyskiwania przy pliku sejfu.")
+                return
+            path = None
+            client = RemoteVaultClient(profile.url, profile.token, ca_file=profile.ca_file)
+        code = PasswordPrompt(self, "Odzyskiwanie dostępu",
+                              "Wpisz kod odzyskiwania (30 znaków, np. ABCDE-FGHJK-…). Myślniki i wielkość liter nie mają znaczenia.\n"
+                              "Nie masz kodu? W firmie dostęp może przywrócić administrator.", secret=False).wait()
+        if not code:
+            return
+        self.error_label.configure(text="🔑 Sprawdzanie kodu odzyskiwania...", text_color=COLOR_TEXT_MUTED)
+
+        def _work():
+            if client is None:
+                with open(path, "rb") as fh:
+                    blob, version = fh.read(), None
+            else:
+                blob, version = client.download()
+            plaintext, ring = unseal_with_recovery_code(blob, code)
+            return plaintext, ring, version
+
+        def _checked(result):
+            if isinstance(result, Exception):
+                self.error_label.configure(text=f"❌ {result}", text_color=COLOR_DANGER)
+                return
+            plaintext, ring, version = result
+            new_pwd = NewPasswordDialog(self, intro="Kod odzyskiwania poprawny. Ustaw nowe hasło główne – stary plik-klucz "
+                                                    "(jeśli był używany) przestaje być wymagany.").wait()
+            if not new_pwd:
+                self.error_label.configure(text="Odzyskiwanie przerwane – hasło nie zostało zmienione.")
+                return
+            self.error_label.configure(text="🔑 Zapisywanie nowego hasła...", text_color=COLOR_TEXT_MUTED)
+            self._run_bg(lambda: self._apply_recovery(plaintext, ring, version, new_pwd, path, client),
+                         lambda res: self._recovered(res, mode, new_pwd))
+
+        self._run_bg(lambda: _safe(_work), _checked)
+
+    @staticmethod
+    def _apply_recovery(plaintext, ring, version, new_pwd, path, client):
+        try:
+            data = json.loads(plaintext.decode("utf-8"))
+            data["revision"] = int(data.get("revision", 0) or 0) + 1  # nowa treść (inne urządzenia przyjmą ją normalnie)
+            blob = seal(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"), new_pwd, None, ring)
+            if client is None:
+                write_encrypted_file(path, blob)
+            else:
+                client.upload(blob, version)
+            return None
+        except Exception as e:
+            return e
+
+    def _recovered(self, error, mode: str, new_pwd: str):
+        if error is not None:
+            self.error_label.configure(text=f"❌ Nie udało się zapisać nowego hasła: {error}", text_color=COLOR_DANGER)
+            return
+        target = self._hello_local_target() if mode == "local" else self._hello_server_target()
+        if target:
+            quick.disable(target)  # zapisane dla Windows Hello stare hasło jest już nieaktualne
+        messagebox.showinfo("Odzyskiwanie dostępu", "Nowe hasło główne zostało ustawione. Odblokowuję sejf.")
+        if mode == "local":
+            self.unlock_key_entry.delete(0, "end")
+            self._do_unlock(password=new_pwd, keyfile=None)
+        else:
+            self.server_key_entry.delete(0, "end")
+            self._do_server_unlock(password=new_pwd, keyfile=None)
+
+    # ------------------------------------------------------------- Windows Hello
+    def _hello_local_target(self) -> Optional[str]:
+        path = self.unlock_file_entry.get().strip()
+        return file_target(path) if path and os.path.isfile(path) else None
+
+    def _hello_server_target(self) -> Optional[str]:
+        p = self.server_profile
+        return server_target(p.url, p.token) if p and p.token else None
+
+    def _refresh_hello_buttons(self, auto: bool = False):
+        if not self.winfo_exists():
+            return
+        local_ok = quick.can_use(self._hello_local_target())
+        server_policy = read_cached_policy(self.server_profile) if self.server_profile else {}
+        server_ok = quick.can_use(self._hello_server_target(), server_policy) and not self.server_fields.winfo_ismapped()
+        if local_ok:
+            self.hello_local_btn.pack(fill="x", pady=(8, 0))
+        else:
+            self.hello_local_btn.pack_forget()
+        if server_ok:
+            self.hello_server_btn.pack(fill="x", pady=(8, 0))
+        else:
+            self.hello_server_btn.pack_forget()
+        # Przy starcie aplikacji od razu pytamy o Windows Hello (raz – nie po każdej blokadzie)
+        global _AUTO_PROMPTED
+        if auto and not _AUTO_PROMPTED and (local_ok or server_ok):
+            _AUTO_PROMPTED = True
+            on_server_tab = self.tabview.get() == "🌐 Serwer"
+            if on_server_tab and server_ok:
+                self.after(300, self._hello_server)
+            elif not on_server_tab and local_ok:
+                self.after(300, self._hello_local)
+
+    def _hello_failed(self, error: Exception, password_entry):
+        self.error_label.configure(text=f"🔐 {error}", text_color=COLOR_DANGER)
+        password_entry.focus()
+
+    def _hello_local(self):
+        target = self._hello_local_target()
+        if not target:
+            return
+        self.error_label.configure(text="🔐 Potwierdź tożsamość w oknie Windows Hello...", text_color=COLOR_TEXT_MUTED)
+        self.hello_local_btn.configure(state="disabled")
+
+        def _done(result):
+            self.hello_local_btn.configure(state="normal")
+            if isinstance(result, Exception):
+                self._hello_failed(result, self.unlock_pwd_entry)
+                return
+            password, keyfile = result
+            self.unlock_method = "hello"
+            self._do_unlock(password=password, keyfile=keyfile)
+        quick.unlock_async(self, target, {}, _done)
+
+    def _hello_server(self):
+        target = self._hello_server_target()
+        if not target:
+            return
+        self.error_label.configure(text="🔐 Potwierdź tożsamość w oknie Windows Hello...", text_color=COLOR_TEXT_MUTED)
+        self.hello_server_btn.configure(state="disabled")
+
+        def _done(result):
+            self.hello_server_btn.configure(state="normal")
+            if isinstance(result, Exception):
+                self._hello_failed(result, self.server_pwd_entry)
+                return
+            password, keyfile = result
+            self.unlock_method = "hello"
+            self._do_server_unlock(password=password, keyfile=keyfile)
+        quick.unlock_async(self, target, read_cached_policy(self.server_profile), _done)
+
     def _setup_create_tab(self):
         f = self.tab_create
 
@@ -252,6 +427,7 @@ class LoginView(ctk.CTkFrame):
             self.unlock_file_entry.delete(0, "end")
             self.unlock_file_entry.insert(0, p)
             self.unlock_pwd_entry.focus()
+            self._refresh_hello_buttons()
 
     def _browse_unlock_keyfile(self):
         p = filedialog.askopenfilename(title="Wybierz plik klucza")
@@ -278,12 +454,16 @@ class LoginView(ctk.CTkFrame):
         self.create_strength_bar.set(eval_res["score"] / 4.0)
         self.create_strength_bar.configure(progress_color=eval_res["color"])
 
-    def _do_unlock(self):
+    def _do_unlock(self, password: Optional[str] = None, keyfile: Optional[bytes] = None):
+        """Odblokowanie sejfu z pliku – hasłem z formularza albo danymi z Windows Hello."""
         file_path = self.unlock_file_entry.get().strip()
-        password = self.unlock_pwd_entry.get()
-        key_path = self.unlock_key_entry.get().strip()
+        from_hello = password is not None
+        if not from_hello:
+            self.unlock_method = "password"
+            password = self.unlock_pwd_entry.get()
+        key_path = "" if from_hello else self.unlock_key_entry.get().strip()
 
-        self.error_label.configure(text="")
+        self.error_label.configure(text="", text_color=COLOR_DANGER)
 
         if not file_path or not os.path.exists(file_path):
             self.error_label.configure(text="Wskazany plik sejfu nie istnieje.")
@@ -293,7 +473,7 @@ class LoginView(ctk.CTkFrame):
             self.error_label.configure(text="Podaj hasło główne sejfu.")
             return
 
-        keyfile_bytes = None
+        keyfile_bytes = keyfile if from_hello else None
         if key_path:
             if not os.path.isfile(key_path):
                 self.error_label.configure(text="Wskazany plik-klucz nie istnieje.")
@@ -414,6 +594,13 @@ class LoginView(ctk.CTkFrame):
             fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, command=self._do_server_unlock
         )
         self.server_btn.pack(fill="x", pady=(4, 0))
+        self.hello_server_btn = ctk.CTkButton(
+            f, text="🔐 Odblokuj przez Windows Hello", height=34, fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER, command=self._hello_server
+        )
+        ctk.CTkButton(f, text="Nie pamiętam hasła", height=22, font=FONT_SMALL, fg_color="transparent",
+                      hover_color=COLOR_CARD_HOVER, text_color=COLOR_TEXT_MUTED,
+                      command=lambda: self._forgot_password("server")).pack(side="bottom", anchor="e", pady=(6, 0))
         self._refresh_server_header()
 
     def _refresh_server_header(self):
@@ -428,6 +615,7 @@ class LoginView(ctk.CTkFrame):
             self._show_cached_logo(p)
             self.server_fields.pack_forget()
             self.server_change_btn.pack(anchor="w", pady=(0, 4), after=self.server_info_lbl)
+            self._refresh_hello_buttons()
         else:
             self.server_info_lbl.configure(text="Połącz ten komputer z serwerem synchronizacji swojej firmy lub własnym (np. przez Tailscale).")
             self.server_change_btn.pack_forget()
@@ -452,6 +640,7 @@ class LoginView(ctk.CTkFrame):
         self.server_change_btn.pack_forget()
         self.server_fields.pack(fill="x", after=self.server_info_lbl)
         self.server_token_entry.focus()
+        self.hello_server_btn.pack_forget()
 
     # ------------------------------------------------------------- Tailscale
     def _detect_tailscale(self):
@@ -510,13 +699,16 @@ class LoginView(ctk.CTkFrame):
         if self.winfo_exists():
             self.server_btn.configure(text=text, state="disabled" if busy else "normal")
 
-    def _do_server_unlock(self):
+    def _do_server_unlock(self, password: Optional[str] = None, keyfile: Optional[bytes] = None):
         self.error_label.configure(text="", text_color=COLOR_DANGER)
-        password = self.server_pwd_entry.get()
-        key_path = self.server_key_entry.get().strip()
+        from_hello = password is not None
+        if not from_hello:
+            self.unlock_method = "password"
+            password = self.server_pwd_entry.get()
+        key_path = "" if from_hello else self.server_key_entry.get().strip()
 
         credential = ""
-        if self.server_fields.winfo_ismapped() or not self.server_profile:
+        if not from_hello and (self.server_fields.winfo_ismapped() or not self.server_profile):
             url = self.server_url_entry.get().strip().rstrip("/")
             credential = self.server_token_entry.get().strip()
             if not url or not credential:
@@ -536,7 +728,7 @@ class LoginView(ctk.CTkFrame):
             self.error_label.configure(text="Podaj hasło główne sejfu.")
             return
 
-        keyfile_bytes = None
+        keyfile_bytes = keyfile if from_hello else None
         if key_path:
             if not os.path.isfile(key_path):
                 self.error_label.configure(text="Wskazany plik-klucz nie istnieje.")
@@ -715,10 +907,12 @@ class LoginView(ctk.CTkFrame):
         return f"❌ {e}"
 
     def _run_bg(self, work, done):
+        poster = getattr(self.winfo_toplevel(), "post_to_ui", None) or (lambda fn: self.after(0, fn))
+
         def _worker():
             result = work()
             try:
-                self.after(0, lambda: self.winfo_exists() and done(result))
+                poster(lambda: self.winfo_exists() and done(result))
             except Exception:
                 pass
         threading.Thread(target=_worker, daemon=True).start()

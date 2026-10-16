@@ -190,6 +190,33 @@ class RemoteVaultClient:
             raise SyncError(f"Nie udało się pobrać historii ({resp.status_code}).")
         return resp.json().get("versions", [])
 
+    # --- załączniki (już zaszyfrowane przez aplikację)
+    def upload_attachment(self, att_id: str, blob: bytes) -> None:
+        resp = self._request("PUT", f"/attachments/{att_id}", data=blob,
+                             headers={"Content-Type": "application/octet-stream"})
+        if resp.status_code != 200:
+            raise SyncError(f"Serwer odrzucił załącznik ({resp.status_code}): {self._detail(resp)}")
+
+    def download_attachment(self, att_id: str, max_bytes: int = 60 * 1024 * 1024) -> bytes:
+        resp = self._request("GET", f"/attachments/{att_id}")
+        if resp.status_code != 200:
+            raise SyncError(f"Nie udało się pobrać załącznika ({resp.status_code}): {self._detail(resp)}")
+        if len(resp.content) > max_bytes:
+            raise SyncError("Załącznik z serwera jest zbyt duży.")
+        return resp.content
+
+    def delete_attachment(self, att_id: str) -> None:
+        try:
+            self._request("DELETE", f"/attachments/{att_id}")
+        except NetworkError:
+            pass  # sprzątanie na serwerze nie jest krytyczne
+
+    def attachments_info(self) -> Dict[str, Any]:
+        resp = self._request("GET", "/attachments")
+        if resp.status_code != 200:
+            raise SyncError(self._detail(resp))
+        return resp.json()
+
     def confirm_totp(self, code: str) -> None:
         """Potwierdza konfigurację 2FA użytkownika (pierwsze urządzenie przy polityce wymagającej 2FA)."""
         resp = _send(self._session, "POST", f"{self.base_url}{API}/account/totp/confirm", self.timeout, self.verify,

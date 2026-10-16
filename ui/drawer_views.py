@@ -22,6 +22,7 @@ from core.vault import Vault, VaultEntry
 from core.generator import generate_password, generate_passphrase, evaluate_password_strength, check_master_password
 from core.totp_service import parse_otpauth_uri, sanitize_secret
 from core.security_audit import check_password_breach_hibp, run_vault_audit, AuditReport
+from core.watchtower import CONSENT_KEY as WATCH_CONSENT_KEY
 from core.storage import save_vault
 from backups import BackupManager, vault_snapshot, merge_runtime_state, oauth
 from importers import (
@@ -443,12 +444,14 @@ class GeneratorDrawerView(ctk.CTkFrame):
 # =====================================================================
 class AuditDrawerView(ctk.CTkFrame):
     def __init__(self, parent, vault: Vault, on_fix_entry: Optional[Callable[[str], None]] = None,
-                 on_report: Optional[Callable[[AuditReport], None]] = None):
+                 on_report: Optional[Callable[[AuditReport], None]] = None,
+                 on_settings_changed: Optional[Callable[[], None]] = None):
         super().__init__(parent, fg_color="transparent")
         self.pack(fill="both", expand=True)
         self.vault = vault
         self.on_fix_entry = on_fix_entry
         self.on_report = on_report  # tryb serwerowy: zbiorczy wynik trafia do raportu firmy
+        self.on_settings_changed = on_settings_changed
         self._report: Optional[AuditReport] = None
 
         self._build_ui()
@@ -481,10 +484,21 @@ class AuditDrawerView(ctk.CTkFrame):
         self.scan_bar.pack(fill="x", pady=(0, 12))
         self.scan_bar.set(0)
 
+        self.monitor_sw = ctk.CTkSwitch(self.scroll, text="Monitoruj wycieki automatycznie (raz dziennie, z powiadomieniem)",
+                                        command=self._toggle_monitoring)
+        if self.vault.settings.get(WATCH_CONSENT_KEY):
+            self.monitor_sw.select()
+        self.monitor_sw.pack(anchor="w", pady=(0, 12))
+
         # Kontener na listę uwag
         ctk.CTkLabel(self.scroll, text="Wykryte uwagi bezpieczeństwa:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 6))
         self.issues_container = ctk.CTkFrame(self.scroll, fg_color="transparent")
         self.issues_container.pack(fill="both", expand=True)
+
+    def _toggle_monitoring(self):
+        self.vault.settings[WATCH_CONSENT_KEY] = bool(self.monitor_sw.get())
+        if self.on_settings_changed:
+            self.on_settings_changed()
 
     def _start_audit(self):
         self.scan_bar.set(0)
@@ -1142,10 +1156,12 @@ class SettingsDrawerView(ctk.CTkFrame):
         on_pwd_changed: Optional[Callable[[str], None]] = None,
         on_saved: Optional[Callable[[], None]] = None,
         password_saver: Optional[Callable[[str], None]] = None,
-        policy: Optional[Dict[str, Any]] = None
+        policy: Optional[Dict[str, Any]] = None,
+        security_options: Optional[Dict[str, Any]] = None
     ):
         super().__init__(parent, fg_color="transparent")
         self.pack(fill="both", expand=True)
+        self.security = security_options or {}
         self.vault = vault
         self.current_password = current_password
         self.vault_file_path = vault_file_path
@@ -1185,6 +1201,16 @@ class SettingsDrawerView(ctk.CTkFrame):
         self.clip_cb.set(next((l for l, s in self._clip_choices if s == cur_sec), self._clip_choices[0][0]))
         self.clip_cb.pack(anchor="w", padx=15, pady=(2, 10))
 
+        self.session_lock_sw = ctk.CTkSwitch(c1, text="Blokuj sejf razem z komputerem (Win+L, wylogowanie)")
+        if self.vault.settings.get("lock_on_session_lock", True):
+            self.session_lock_sw.select()
+        self.session_lock_sw.pack(anchor="w", padx=15, pady=(0, 10))
+
+        if self.security:
+            self._build_security_card(scroll)
+        if self.security.get("recovery"):
+            self._build_recovery_card(scroll)
+
         # Zmiana hasła głównego
         c2 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
         c2.pack(fill="x", pady=6, ipady=6)
@@ -1204,9 +1230,106 @@ class SettingsDrawerView(ctk.CTkFrame):
         bar.pack(fill="x", side="bottom", pady=(5, 0))
         ctk.CTkButton(bar, text="Zapisz ustawienia", fg_color=COLOR_SUCCESS, command=self._save).pack(side="right", padx=10, pady=8)
 
+    def _build_security_card(self, parent):
+        """Windows Hello i globalne skróty klawiszowe (ustawienia tego komputera, nie sejfu)."""
+        sec = self.security
+        card = ctk.CTkFrame(parent, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        card.pack(fill="x", pady=6, ipady=6)
+        ctk.CTkLabel(card, text="🔐 Windows Hello i skróty", font=FONT_SUBTITLE,
+                     text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 4))
+
+        self.hello_sw = ctk.CTkSwitch(card, text="Odblokowuj odciskiem palca, twarzą lub PIN-em Windows",
+                                      command=self._toggle_hello)
+        if sec.get("hello_enabled"):
+            self.hello_sw.select()
+        self.hello_sw.pack(anchor="w", padx=15, pady=(2, 2))
+        if not sec.get("hello_available"):
+            hint, state = ("Windows Hello nie jest skonfigurowane na tym komputerze (Ustawienia Windows → Konta → "
+                           "Opcje logowania → PIN lub odcisk palca)."), "disabled"
+        elif not sec.get("hello_allowed"):
+            hint, state = "Wyłączone przez politykę bezpieczeństwa Twojej firmy.", "disabled"
+        else:
+            hint, state = (f"Hasło główne będzie potrzebne raz na {sec.get('hello_days', 14)} dni. Dane szybkiego "
+                           "odblokowania chroni moduł bezpieczeństwa (TPM) tego komputera."), "normal"
+        self.hello_sw.configure(state=state)
+        ctk.CTkLabel(card, text=hint, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=440,
+                     justify="left").pack(anchor="w", padx=15, pady=(0, 10))
+
+        hk = sec.get("hotkeys") or {}
+        self.hotkeys_sw = ctk.CTkSwitch(card, text="Globalne skróty klawiszowe (działają w każdym programie)")
+        if hk.get("enabled", True):
+            self.hotkeys_sw.select()
+        self.hotkeys_sw.pack(anchor="w", padx=15, pady=(2, 6))
+        registered = sec.get("hotkeys_registered") or {}
+        self._hotkey_entries = {}
+        for key, label in (("search", "Szybkie wyszukiwanie (Enter kopiuje hasło)"),
+                           ("autotype", "Autotype – wpisz login i hasło w aktywne okno")):
+            row = ctk.CTkFrame(card, fg_color="transparent")
+            row.pack(fill="x", padx=15, pady=2)
+            entry = ctk.CTkEntry(row, width=170)
+            entry.insert(0, hk.get(key, ""))
+            entry.pack(side="left")
+            note = label
+            if hk.get("enabled", True) and key in registered and not registered[key]:
+                note += "  ⚠️ skrót zajęty przez inny program"
+            if key == "autotype" and not sec.get("autotype_allowed", True):
+                note += "  (wyłączone przez politykę firmy)"
+            ctk.CTkLabel(row, text=note, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left", padx=8)
+            self._hotkey_entries[key] = entry
+        ctk.CTkLabel(card, text=("Autotype dopasowuje wpis do tytułu okna (nazwa wpisu lub domena strony). "
+                                 "Własną kolejność wpisywania ustawisz w polu niestandardowym „Sekwencja autotype”, "
+                                 "np. {USERNAME}{TAB}{PASSWORD}{TAB}{TOTP}{ENTER}."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=440, justify="left"
+                     ).pack(anchor="w", padx=15, pady=(6, 8))
+
+    def _build_recovery_card(self, parent):
+        rec = self.security["recovery"]
+        card = ctk.CTkFrame(parent, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        card.pack(fill="x", pady=6, ipady=6)
+        ctk.CTkLabel(card, text="🔑 Odzyskiwanie dostępu", font=FONT_SUBTITLE,
+                     text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 4))
+        status = "✅ ustawiony" if rec.get("has_code") else "brak"
+        ctk.CTkLabel(card, text=f"Osobisty kod odzyskiwania: {status}", font=FONT_BODY).pack(anchor="w", padx=15)
+        ctk.CTkLabel(card, text=("Kod pozwala ustawić nowe hasło główne, gdy je zapomnisz. Pokazywany jest tylko raz – "
+                                 "zapisz go poza komputerem. Utworzenie nowego kodu unieważnia poprzedni."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=440, justify="left").pack(anchor="w", padx=15)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=8)
+        ctk.CTkButton(row, text="Utwórz nowy kod" if rec.get("has_code") else "Utwórz kod odzyskiwania",
+                      fg_color=COLOR_PRIMARY, command=rec["on_create"]).pack(side="left")
+        if rec.get("has_code"):
+            ctk.CTkButton(row, text="Usuń kod", fg_color=COLOR_PANEL_DARK, command=rec["on_remove"]).pack(side="left", padx=8)
+        if rec.get("org_key_id"):
+            org = f"🏢 Odzyskiwanie przez firmę: włączone (odcisk klucza {rec['org_key_id']})"
+        elif rec.get("org_policy"):
+            org = "🏢 Odzyskiwanie przez firmę: zostanie włączone przy najbliższej synchronizacji"
+        else:
+            org = "🏢 Odzyskiwanie przez firmę: wyłączone"
+        ctk.CTkLabel(card, text=org, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=15)
+        ctk.CTkButton(card, text="Narzędzia administratora firmy…", height=26, font=FONT_SMALL, fg_color="transparent",
+                      hover_color=COLOR_PANEL_DARK, command=rec["on_admin_tools"]).pack(anchor="w", padx=10, pady=(4, 8))
+
+    def _toggle_hello(self):
+        handler = self.security.get("on_hello_toggle")
+        if handler:
+            handler(bool(self.hello_sw.get()))
+
     def _save(self):
         self.vault.settings["auto_lock_minutes"] = dict(self._lock_choices).get(self.lock_cb.get(), self._lock_choices[0][1])
         self.vault.settings["clipboard_clear_seconds"] = dict(self._clip_choices).get(self.clip_cb.get(), self._clip_choices[0][1])
+        self.vault.settings["lock_on_session_lock"] = bool(self.session_lock_sw.get())
+        if self.security.get("on_hotkeys_save"):
+            prefs = {"enabled": bool(self.hotkeys_sw.get()),
+                     **{k: e.get().strip() for k, e in self._hotkey_entries.items()}}
+            try:
+                registered = self.security["on_hotkeys_save"](prefs)
+            except ValueError as e:
+                messagebox.showerror("Skróty klawiszowe", f"Nieprawidłowy skrót: {e}\nPrzykład: Ctrl+Shift+Space")
+                return
+            busy = [k for k, ok in (registered or {}).items() if not ok]
+            if prefs["enabled"] and busy:
+                messagebox.showwarning("Skróty klawiszowe", "Niektóre skróty są zajęte przez inny program – "
+                                                           "wybierz inną kombinację klawiszy.")
         if self.on_saved:
             self.on_saved()
         messagebox.showinfo("Zapisano", "Ustawienia zostały zapisane.")
@@ -1233,6 +1356,7 @@ class SettingsDrawerView(ctk.CTkFrame):
         if policy_msg and not required and not messagebox.askyesno("Średnio silne hasło główne", policy_msg + "\n\nUżyć mimo to?", icon="warning"):
             return
         try:
+            self.vault.settings.pop("force_password_change", None)  # hasło tymczasowe od administratora zmienione
             if self.password_saver:
                 self.password_saver(np)  # zapis + powiadomienie o zmianie hasła
             else:

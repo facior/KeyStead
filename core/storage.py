@@ -8,7 +8,7 @@ import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
-from core.crypto import encrypt_payload, decrypt_payload, compute_sha256
+from core.crypto import compute_sha256, seal, unseal
 from core.vault import Vault
 
 
@@ -28,11 +28,8 @@ def save_vault(
     # Zapisy z kolejki w tle (np. starym hasłem) nie mogą nadpisać tego zapisu po nim
     background_saver.flush()
     json_bytes = vault.to_json().encode("utf-8")
-    encrypted_blob = encrypt_payload(
-        plaintext_bytes=json_bytes,
-        password=master_password,
-        keyfile_bytes=keyfile_bytes
-    )
+    # Format v2, gdy sejf ma pęk kluczy (kod odzyskiwania / klucz firmy); inaczej v1 jak dotąd
+    encrypted_blob = seal(json_bytes, master_password, keyfile_bytes, getattr(vault, "keyring", None))
     write_encrypted_file(file_path, encrypted_blob)
     return len(encrypted_blob), compute_sha256(encrypted_blob)
 
@@ -54,7 +51,7 @@ class BackgroundSaver:
         self._pending: List[Future] = []
 
     def submit(self, json_bytes: bytes, file_path: str, master_password: str,
-               keyfile_bytes: Optional[bytes] = None) -> Future:
+               keyfile_bytes: Optional[bytes] = None, keyring=None) -> Future:
         key = os.path.abspath(file_path)
         with self._lock:
             self._generation += 1
@@ -65,7 +62,7 @@ class BackgroundSaver:
             with self._lock:
                 if self._latest.get(key) != gen:
                     return False  # nowszy zapis już czeka – ten jest nieaktualny
-            blob = encrypt_payload(plaintext_bytes=json_bytes, password=master_password, keyfile_bytes=keyfile_bytes)
+            blob = seal(json_bytes, master_password, keyfile_bytes, keyring)
             write_encrypted_file(file_path, blob)
             return True
 
@@ -123,8 +120,10 @@ def vault_from_blob(
     keyfile_bytes: Optional[bytes] = None
 ) -> Vault:
     """Odszyfrowuje sejf z bajtów (np. pobranych z serwera synchronizacji)."""
-    decrypted = decrypt_payload(encrypted_blob, master_password, keyfile_bytes)
-    return Vault.from_json(decrypted.decode("utf-8"))
+    decrypted, keyring = unseal(encrypted_blob, master_password, keyfile_bytes)
+    vault = Vault.from_json(decrypted.decode("utf-8"))
+    vault.keyring = keyring
+    return vault
 
 
 def load_vault(
@@ -141,15 +140,7 @@ def load_vault(
 
     with open(file_path, "rb") as f:
         encrypted_blob = f.read()
-
-    decrypted_bytes = decrypt_payload(
-        encrypted_blob=encrypted_blob,
-        password=master_password,
-        keyfile_bytes=keyfile_bytes
-    )
-
-    json_str = decrypted_bytes.decode("utf-8")
-    return Vault.from_json(json_str)
+    return vault_from_blob(encrypted_blob, master_password, keyfile_bytes)
 
 
 def change_vault_credentials(

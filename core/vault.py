@@ -119,7 +119,8 @@ class VaultEntry:
         entry_id: Optional[str] = None,
         created_at: Optional[str] = None,
         updated_at: Optional[str] = None,
-        password_history: Optional[List[Dict[str, str]]] = None
+        password_history: Optional[List[Dict[str, str]]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None
     ):
         now_iso = datetime.now(timezone.utc).isoformat()
         self.id = as_text(entry_id, 64) or str(uuid.uuid4())
@@ -137,6 +138,9 @@ class VaultEntry:
         self.updated_at = as_text(updated_at, 64) or now_iso
         self.password_history = [h for h in (password_history or []) if isinstance(h, dict)] \
             if isinstance(password_history, list) else []
+        from core.attachments import clean_meta
+        self.attachments = [m for m in (clean_meta(a) for a in (attachments or [])[:100]) if m] \
+            if isinstance(attachments, list) else []
 
     def update(
         self,
@@ -198,7 +202,8 @@ class VaultEntry:
             "favorite": self.favorite,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "password_history": self.password_history
+            "password_history": self.password_history,
+            "attachments": self.attachments
         }
 
     @classmethod
@@ -217,7 +222,8 @@ class VaultEntry:
             favorite=data.get("favorite", False),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
-            password_history=data.get("password_history", [])
+            password_history=data.get("password_history", []),
+            attachments=data.get("attachments", [])
         )
 
 
@@ -232,6 +238,8 @@ class Vault:
         # Licznik zapisów wewnątrz zaszyfrowanej treści: serwer synchronizacji nie może go zmienić bez hasła,
         # więc aplikacja rozpozna podsuniętą starą wersję sejfu (np. z hasłem sprzed zmiany)
         self.revision = 0
+        # Pęk kluczy formatu v2 (klucz danych + kod odzyskiwania / klucz firmy) – tylko w pamięci, nie w JSON
+        self.keyring = None
         self.name = name
         self.categories = categories or list(DEFAULT_CATEGORIES[1:])  # bez 'Wszystkie'
         self.settings = _merge_settings(default_settings(), settings or {})
@@ -268,6 +276,11 @@ class Vault:
             self.trash.pop(entry_id, None)
         else:
             self.trash.clear()
+
+    def attachment_in_use(self, att_id: str) -> bool:
+        """Czy plik jest jeszcze używany przez jakikolwiek wpis (także w koszu, np. po duplikacji wpisu)."""
+        return any(a.get("id") == att_id for e in list(self.entries.values()) + list(self.trash.values())
+                   for a in e.attachments)
 
     def add_category(self, category_name: str) -> bool:
         category_name = category_name.strip()

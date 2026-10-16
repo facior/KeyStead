@@ -74,6 +74,26 @@ class EntryList(ctk.CTkFrame):
             if idx is not None:
                 self._paint_row(idx)
 
+    def move_selection(self, delta: int) -> Optional[str]:
+        """Strzałki ↑/↓: zaznacza sąsiedni wiersz, przewija do niego i zwraca jego id."""
+        if not self.items:
+            return None
+        idx = self._index_of(self.selected_id)
+        idx = 0 if idx is None else max(0, min(len(self.items) - 1, idx + delta))
+        self.set_selected(self.items[idx]["id"])
+        self.ensure_visible(idx)
+        return self.selected_id
+
+    def ensure_visible(self, idx: int) -> None:
+        top, height = self.canvas.canvasy(0), self.canvas.winfo_height()
+        row_top, row_bottom = self._row_top(idx), self._row_top(idx) + self.row_h
+        total = self._content_height()
+        if row_top < top:
+            self.canvas.yview_moveto(max(0, row_top - self.gap) / total)
+        elif row_bottom > top + height:
+            self.canvas.yview_moveto(max(0, row_bottom + self.gap - height) / total)
+        self._draw_visible()
+
     # ------------------------------------------------------------ rysowanie
     def _row_top(self, i: int) -> int:
         return self.gap // 2 + i * (self.row_h + self.gap)

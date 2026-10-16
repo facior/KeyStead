@@ -13,10 +13,14 @@ import tkinter as tk
 import tkinter.font as tkfont
 from typing import Optional, Callable, List, Dict, Any
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
+from datetime import datetime, timezone
+
+from core.attachments import (DEFAULT_MAX_MB as DEFAULT_ATTACHMENT_MB, decrypt_attachment, new_attachment, store_for,
+                              write_temp_copy)
 
 from core.vault import Vault, VaultEntry, DEFAULT_CATEGORIES
-from core.crypto import encrypt_payload
+from core.crypto import seal
 from core.storage import background_saver
 from core.totp_service import get_current_totp, get_totp_remaining_seconds
 from core.generator import evaluate_password_strength
@@ -31,6 +35,7 @@ from ui.clipboard import SecureClipboard
 from ui.policy import effective_clipboard, personal_backups_allowed
 from ui.drawer import SlidingDrawer
 from ui.entry_list import EntryList
+from core.watchtower import attention_count
 from ui import perf
 
 perf.apply()
@@ -43,6 +48,14 @@ from ui.drawer_views import (
     SettingsDrawerView,
     SyncDrawerView
 )
+
+
+def _human_size(size: int) -> str:
+    for unit in ("B", "KB", "MB"):
+        if size < 1024 or unit == "MB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} MB"
 
 
 class MainView(ctk.CTkFrame):
@@ -116,13 +129,143 @@ class MainView(ctk.CTkFrame):
 
     def _run_in_background(self, work: Callable[[], Any], on_done: Callable[[Any], None]):
         """Uruchamia pracę sieciową w wątku i bezpiecznie wraca z wynikiem do wątku UI."""
+        poster = getattr(self.winfo_toplevel(), "post_to_ui", None) or (lambda fn: self.after(0, fn))
+
         def _worker():
-            result = work()
             try:
-                self.after(0, lambda: self.winfo_exists() and on_done(result))
+                result = work()
+            except Exception as e:
+                result = e
+            try:
+                poster(lambda: self.winfo_exists() and on_done(result))
             except Exception:
                 pass  # Widok został zniszczony (np. blokada sejfu)
         threading.Thread(target=_worker, daemon=True).start()
+
+    # ----------------- ZAŁĄCZNIKI -----------------
+    @property
+    def attachment_store(self):
+        if getattr(self, "_attachment_store", None) is None:
+            self._attachment_store = store_for(self.vault_file_path, self.sync_session)
+        return self._attachment_store
+
+    def _attachments_allowed(self) -> bool:
+        return (self.policy or {}).get("allow_attachments", True) is not False
+
+    def _attachment_limit(self) -> int:
+        try:
+            mb = int((self.policy or {}).get("max_attachment_mb") or DEFAULT_ATTACHMENT_MB)
+        except (TypeError, ValueError):
+            mb = DEFAULT_ATTACHMENT_MB
+        return max(1, min(mb, 50)) * 1024 * 1024
+
+    def _render_attachments(self, container, entry: VaultEntry, read_only: bool):
+        if not entry.attachments and (read_only or not self._attachments_allowed()):
+            return
+        card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
+        card.pack(fill="x", pady=(0, 10), ipady=6)
+        head = self._plain_frame(card)
+        head.pack(fill="x", padx=12, pady=(6, 4))
+        self._label(head, text=f"📂 Załączniki ({len(entry.attachments)})", font=FONT_SMALL,
+                    text_color=COLOR_TEXT_MUTED).pack(side="left")
+        if not read_only and self._attachments_allowed():
+            ctk.CTkButton(head, text="+ Dodaj plik", width=95, height=24, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
+                          command=lambda: self._add_attachment(entry)).pack(side="right")
+        for meta in list(entry.attachments):
+            row = self._plain_frame(card)
+            row.pack(fill="x", padx=12, pady=2)
+            self._label(row, text=f"📄 {meta['name']}", font=FONT_BODY, anchor="w").pack(side="left")
+            self._label(row, text=f"  {_human_size(meta.get('size', 0))}", font=FONT_SMALL,
+                        text_color=COLOR_TEXT_MUTED).pack(side="left")
+            if not read_only:
+                ctk.CTkButton(row, text="Usuń", width=50, height=22, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
+                              command=lambda m=meta: self._remove_attachment(entry, m)).pack(side="right", padx=(4, 0))
+            ctk.CTkButton(row, text="Zapisz…", width=62, height=22, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
+                          command=lambda m=meta: self._save_attachment_as(m)).pack(side="right", padx=(4, 0))
+            ctk.CTkButton(row, text="Otwórz", width=58, height=22, font=FONT_SMALL, fg_color=COLOR_PRIMARY,
+                          command=lambda m=meta: self._open_attachment(m)).pack(side="right")
+
+    def _add_attachment(self, entry: VaultEntry):
+        path = filedialog.askopenfilename(title="Wybierz plik do zaszyfrowania i dołączenia")
+        if not path:
+            return
+        limit = self._attachment_limit()
+        store = self.attachment_store
+        self.show_toast("🔐 Szyfrowanie i zapisywanie załącznika...")
+
+        def _work():
+            meta, blob = new_attachment(path, limit)
+            store.put(meta["id"], blob)  # najpierw plik (także na serwerze), dopiero potem wpis w sejfie
+            return meta
+
+        def _done(result):
+            if isinstance(result, Exception):
+                self.show_toast(f"Nie dodano załącznika: {result}", error=True)
+                return
+            entry.attachments.append(result)
+            entry.updated_at = datetime.now(timezone.utc).isoformat()
+            self._save_vault_to_disk()
+            if self.selected_entry_id == entry.id:
+                self._render_entry_details(entry.id)
+            self.show_toast(f"📂 Dodano „{result['name']}”")
+        self._run_in_background(_work, _done)
+
+    def _load_attachment(self, meta, on_data):
+        store = self.attachment_store
+        self._run_in_background(lambda: decrypt_attachment(meta, store.get(meta["id"])), on_data)
+
+    def _open_attachment(self, meta):
+        def _done(data):
+            if isinstance(data, Exception):
+                self.show_toast(f"Nie można otworzyć: {data}", error=True)
+                return
+            path = write_temp_copy(meta, data)
+            try:
+                os.startfile(path)  # domyślny program dla tego typu pliku
+            except (AttributeError, OSError) as e:
+                self.show_toast(f"Nie można otworzyć pliku: {e}", error=True)
+                return
+            self.show_toast("Otwarto kopię tymczasową – zostanie usunięta po zablokowaniu sejfu")
+        self._load_attachment(meta, _done)
+
+    def _save_attachment_as(self, meta):
+        target = filedialog.asksaveasfilename(title="Zapisz odszyfrowany załącznik", initialfile=meta["name"])
+        if not target:
+            return
+
+        def _done(data):
+            if isinstance(data, Exception):
+                self.show_toast(f"Nie można zapisać: {data}", error=True)
+                return
+            with open(target, "wb") as f:
+                f.write(data)
+            self.show_toast(f"Zapisano „{os.path.basename(target)}”")
+        self._load_attachment(meta, _done)
+
+    def _remove_attachment(self, entry: VaultEntry, meta):
+        if not messagebox.askyesno("Usuń załącznik", f"Usunąć załącznik „{meta['name']}” z tego wpisu?"):
+            return
+        entry.attachments = [a for a in entry.attachments if a.get("id") != meta["id"]]
+        entry.updated_at = datetime.now(timezone.utc).isoformat()
+        self._save_vault_to_disk()
+        self._delete_unused_attachments([meta["id"]])
+        if self.selected_entry_id == entry.id:
+            self._render_entry_details(entry.id)
+
+    def _delete_unused_attachments(self, ids):
+        """Po zapisie sejfu: usuwa pliki, których nie używa już żaden wpis (najpierw sejf, potem pliki)."""
+        unused = [i for i in ids if not self.vault.attachment_in_use(i)]
+        if not unused:
+            return
+        store = self.attachment_store
+
+        def _work():
+            for att_id in unused:
+                try:
+                    store.delete(att_id)
+                except Exception:
+                    pass
+        self._run_in_background(_work, lambda _r: None)
 
     def _build_ui(self):
         # 1. Pasek górny (Top Navigation Bar)
@@ -196,14 +339,15 @@ class MainView(ctk.CTkFrame):
             command=self._open_generator_dialog
         ).pack(side="left", padx=3)
 
-        ctk.CTkButton(
+        self.audit_btn = ctk.CTkButton(
             self.actions_box,
             text="🛡️ Audyt Wycieków",
             fg_color="#7c3aed",
             hover_color="#6d28d9",
             width=125,
             command=self._open_audit_dialog
-        ).pack(side="left", padx=3)
+        )
+        self.audit_btn.pack(side="left", padx=3)
 
         ctk.CTkButton(
             self.actions_box,
@@ -597,8 +741,10 @@ class MainView(ctk.CTkFrame):
 
     def _empty_entire_trash(self):
         if messagebox.askyesno("Opróżnianie kosza", "Czy na pewno chcesz bezpowrotnie usunąć wszystkie elementy z kosza?"):
+            ids = [a["id"] for e in self.vault.trash.values() for a in e.attachments]
             self.vault.empty_trash()
             self._save_vault_to_disk()
+            self._delete_unused_attachments(ids)
             self._build_sidebar()
             self._refresh_entries_list()
             self._show_trash_header_in_details()
@@ -806,6 +952,9 @@ class MainView(ctk.CTkFrame):
             self._label(n_card, text="Bezpieczne notatki", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=12, pady=(6, 4))
             self._label(n_card, text=entry.notes, font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, wraplength=480, justify="left").pack(anchor="w", padx=12, pady=(0, 6))
 
+        # 9b. Załączniki
+        self._render_attachments(container, entry, read_only=is_in_trash)
+
         # 10. Tagi
         if entry.tags:
             t_box = self._plain_frame(container)
@@ -883,6 +1032,15 @@ class MainView(ctk.CTkFrame):
         SecureClipboard.copy(text, timeout_seconds=clip_sec)
         self._show_toast(toast_msg)
 
+    def set_audit_badge(self, count: int, critical: bool = False):
+        """Plakietka na przycisku audytu: liczba haseł wymagających uwagi (czerwona przy wycieku)."""
+        if not self.winfo_exists():
+            return
+        text = f"🛡️ Audyt Wycieków ({count})" if count else "🛡️ Audyt Wycieków"
+        color = (COLOR_DANGER, "#e11d48") if critical else ("#7c3aed", "#6d28d9")
+        self.audit_btn.configure(text=text, fg_color=color[0], hover_color=color[1],
+                                 width=150 if count else 125)
+
     def show_toast(self, message: str, error: bool = False):
         """Krótki komunikat w prawym dolnym rogu okna."""
         toast = ctk.CTkToplevel(self)
@@ -928,8 +1086,8 @@ class MainView(ctk.CTkFrame):
                 self.vault.revision = self.sync_session.next_revision(self.vault.revision)
                 # Migawka sejfu teraz (wątek UI), kosztowne szyfrowanie w kolejce synchronizacji – okno nie zamarza
                 data = self.vault.to_json().encode("utf-8")
-                pwd, kf = self.master_password, self.keyfile_bytes
-                future = self.sync_session.queue_save(lambda: encrypt_payload(data, pwd, kf), revision=self.vault.revision)
+                pwd, kf, ring = self.master_password, self.keyfile_bytes, self.vault.keyring
+                future = self.sync_session.queue_save(lambda: seal(data, pwd, kf, ring), revision=self.vault.revision)
                 self.count_badge.configure(text=f"({len(self.vault.entries)} wpisów)")
                 if trigger_backup and self.on_auto_backup_trigger:
                     # Kopia zapasowa dopiero po zapisaniu lokalnej kopii
@@ -942,7 +1100,8 @@ class MainView(ctk.CTkFrame):
                 return True
             else:
                 data = self.vault.to_json().encode("utf-8")
-                future = background_saver.submit(data, self.vault_file_path, self.master_password, self.keyfile_bytes)
+                future = background_saver.submit(data, self.vault_file_path, self.master_password, self.keyfile_bytes,
+                                                 keyring=self.vault.keyring)
                 self.count_badge.configure(text=f"({len(self.vault.entries)} wpisów)")
 
                 def _local_done(f, backup=trigger_backup and self.on_auto_backup_trigger):
@@ -997,6 +1156,7 @@ class MainView(ctk.CTkFrame):
         if messagebox.askyesno("Trwałe usunięcie", f"Czy na pewno trwale usunąć wpis '{entry.title}'? Tej operacji nie można cofnąć."):
             self.vault.empty_trash(entry.id)
             self._save_vault_to_disk()
+            self._delete_unused_attachments([a["id"] for a in entry.attachments])
             self.selected_entry_id = None
             self._build_sidebar()
             self._refresh_entries_list()
@@ -1067,7 +1227,14 @@ class MainView(ctk.CTkFrame):
             if entry:
                 self._open_edit_entry_dialog(entry)
 
-        AuditDrawerView(container, vault=self.vault, on_fix_entry=_fix_entry, on_report=self.on_audit_report)
+        def _report(report):
+            # Ręczny audyt odświeża też plakietkę na przycisku
+            self.set_audit_badge(attention_count(report), critical=bool(report.breached_issues))
+            if self.on_audit_report:
+                self.on_audit_report(report)
+
+        AuditDrawerView(container, vault=self.vault, on_fix_entry=_fix_entry, on_report=_report,
+                        on_settings_changed=lambda: self._save_vault_to_disk(trigger_backup=False))
 
     def _open_backup_dialog(self):
         if not personal_backups_allowed(self.policy):
@@ -1127,7 +1294,8 @@ class MainView(ctk.CTkFrame):
             on_pwd_changed=_pwd_changed,
             on_saved=self._save_vault_to_disk,
             password_saver=_save_with_new_password if self.sync_session else None,
-            policy=self.policy
+            policy=self.policy,
+            security_options=getattr(self.winfo_toplevel(), "security_options", lambda: None)()
         )
 
     # ----------------- SYNCHRONIZACJA Z SERWEREM -----------------
