@@ -188,6 +188,36 @@ class TestMainViewSmoothness(unittest.TestCase):
         mapped = [p.winfo_ismapped() for p, _s in self.view._details_cache.values()]
         self.assertEqual(sorted(mapped), [False, True])  # widoczny tylko jeden panel
 
+    def test_mouse_wheel_shared_handler_and_smooth_scroll(self):
+        def wheel_bindings():
+            return self.root.tk.call("bind", "all", "<MouseWheel>").count("\n") + 1
+        for _ in range(5):  # szuflady i pasek boczny tworzą nowe przewijane ramki
+            self.view._open_settings_dialog()
+            self.pump(0.1)
+            self.view.drawer.close()
+            self.view._toggle_sidebar_manually()
+            self.pump(0.3)
+        before = wheel_bindings()
+        self.view._open_import_dialog()
+        self.pump(0.1)
+        self.assertEqual(wheel_bindings(), before)  # kolejne ramki nie dokładają globalnych procedur
+        self.view.drawer.close()
+        self.pump(0.3)
+
+        entry = next(iter(self.vault.entries.values()))
+        entry.notes = "Długa notatka. " * 400
+        self.view._select_entry(entry.id)
+        self.pump()
+        canvas = self.view.details_scroll._parent_canvas
+        bar = self.view.details_scroll._scrollbar
+        canvas.event_generate("<MouseWheel>", delta=-240, x=10, y=10)
+        self.pump(0.05)
+        midway = canvas.canvasy(0)
+        self.pump(0.4)
+        self.assertGreater(canvas.canvasy(0), midway)  # animacja dojeżdża w kilku klatkach
+        self.assertGreater(midway, 0)
+        self.assertGreater(bar._start_value, 0)  # suwak nadąża za treścią
+
     def test_flat_button_click_and_window_breakpoints(self):
         from ui.flat_button import FlatButton
         clicked = []

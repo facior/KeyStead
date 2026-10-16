@@ -13,6 +13,7 @@ from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
+from ui.perf import SmoothScroller
 from ui.theme import (COLOR_CARD_DARK, COLOR_CARD_HOVER, COLOR_PRIMARY, COLOR_TEXT_MUTED, COLOR_TEXT_PRIMARY,
                       FONT_FAMILY)
 
@@ -40,8 +41,6 @@ class EntryList(ctk.CTkFrame):
         self._rects: Dict[int, int] = {}  # indeks wiersza -> element tła (tylko narysowane wiersze)
         self._empty_text = ""
         self._last_width = 0
-        self._scroll_target: Optional[float] = None
-        self._scroll_job = None
 
         s = self._get_widget_scaling()
         self.s = s
@@ -55,6 +54,7 @@ class EntryList(ctk.CTkFrame):
         self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, yscrollincrement=1)
         self.scrollbar = ctk.CTkScrollbar(self, command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self._on_scroll_changed)
+        self._scroller = SmoothScroller(self.canvas, self._content_height)
         self.canvas.pack(side="left", fill="both", expand=True)
 
         self.canvas.bind("<Configure>", self._on_resize)
@@ -224,37 +224,11 @@ class EntryList(ctk.CTkFrame):
         self._draw_visible()
 
     def _on_wheel(self, event) -> None:
-        """Płynne przewijanie: każdy obrót kółka przesuwa cel, animacja dojeżdża do niego w kilku klatkach."""
-        total = self._content_height()
-        view_h = self.canvas.winfo_height()
-        if total <= view_h:
-            return
-        current = self.canvas.canvasy(0)
-        base = self._scroll_target if self._scroll_target is not None else current
-        step = -event.delta / 120 * self.row_h * 1.6
-        self._scroll_target = max(0.0, min(base + step, total - view_h))
-        if self._scroll_job is None:
-            self._animate_scroll()
-
-    def _animate_scroll(self) -> None:
-        self._scroll_job = None
-        if self._scroll_target is None or not self.winfo_exists():
-            return
-        current = self.canvas.canvasy(0)
-        diff = self._scroll_target - current
-        if abs(diff) < 1:
-            self._scroll_target = None
-            return
-        move = diff * 0.35
-        move = int(move) if abs(move) >= 1 else (1 if diff > 0 else -1)
-        self.canvas.yview_scroll(move, "units")
-        self._scroll_job = self.after(12, self._animate_scroll)
+        """Płynne przewijanie: każdy obrót kółka przesuwa cel, widok dojeżdża do niego w czasie rzeczywistym."""
+        self._scroller.scroll_by(-event.delta / 120 * self.row_h * 1.6)
 
     def _stop_scroll_animation(self) -> None:
-        if self._scroll_job is not None:
-            self.after_cancel(self._scroll_job)
-            self._scroll_job = None
-        self._scroll_target = None
+        self._scroller.stop()
 
     # ------------------------------------------------------------ zdarzenia
     def _row_at(self, event) -> Optional[int]:
