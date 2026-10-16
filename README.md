@@ -141,3 +141,12 @@ Aplikację można skompilować do samodzielnego pliku wykonywalnego na system Wi
 pyinstaller --noconsole --onefile --name "KeyStead" main.py
 ```
 Plik `.exe` znajdzie się w katalogu `dist/`.
+
+
+## Wersje, autor i licencja
+
+- **Numeracja wersji:** pierwsze dwie liczby są wspólne dla aplikacji i serwera (nowe funkcje wydawane razem),
+  ostatnia oznacza poprawki tylko w jednej części. Aplikacja **2.0.x** współpracuje z serwerem **2.0.x** i nowszym.
+- **Autor:** Łukasz Kubieniec – [github.com/facior](https://github.com/facior)
+- **Licencja:** © 2026 Łukasz Kubieniec. Wszelkie prawa zastrzeżone. Oprogramowanie zastrzeżone – udostępnienie kodu
+  nie oznacza udzielenia licencji; szczegóły w pliku [LICENSE](LICENSE).

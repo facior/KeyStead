@@ -1531,10 +1531,19 @@ class MainView(ctk.CTkFrame):
                 on_saved=self._save_vault_to_disk,
                 password_saver=_save_with_new_password if self.sync_session else None,
                 policy=self.policy,
-                security_options=getattr(self.winfo_toplevel(), "security_options", lambda: None)()
+                security_options=getattr(self.winfo_toplevel(), "security_options", lambda: None)(),
+                on_open_about=self._open_about_dialog
             )
 
         self.drawer.open("Ustawienia Sejfu", "Zarządzanie czasem blokady, schowkiem i hasłem głównym", build=_build)
+
+    def _open_about_dialog(self):
+        from ui.about_view import AboutView
+        session = self.sync_session
+        url = session.profile.url if session else ""
+        version = getattr(session, "server_version", "") if session else ""
+        self.drawer.open("O programie", "Wersja, zgodność z serwerem, autor i licencja",
+                         build=lambda c: AboutView(c, server_url=url, server_version=version))
 
     # ----------------- SYNCHRONIZACJA Z SERWEREM -----------------
     # stan → (ikona, tekst, tło, kolor tekstu)

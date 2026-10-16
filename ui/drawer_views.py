@@ -32,6 +32,7 @@ from importers import (
     STRATEGY_SKIP, STRATEGY_ADD_ALL, STRATEGY_UPDATE
 )
 from importers.base import tidy_vault, untidy_entries
+from core.version import APP_VERSION
 from ui.theme import (
     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_CODE, FONT_SMALL,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT, COLOR_CARD_DARK, COLOR_CARD_HOVER,
@@ -1207,10 +1208,12 @@ class SettingsDrawerView(ctk.CTkFrame):
         on_saved: Optional[Callable[[], None]] = None,
         password_saver: Optional[Callable[[str], None]] = None,
         policy: Optional[Dict[str, Any]] = None,
-        security_options: Optional[Dict[str, Any]] = None
+        security_options: Optional[Dict[str, Any]] = None,
+        on_open_about: Optional[Callable[[], None]] = None
     ):
         super().__init__(parent, fg_color="transparent")
         self.pack(fill="both", expand=True)
+        self.on_open_about = on_open_about
         self.security = security_options or {}
         self.vault = vault
         self.current_password = current_password
@@ -1286,6 +1289,17 @@ class SettingsDrawerView(ctk.CTkFrame):
         self.cnf_p.pack(fill="x", padx=15, pady=3)
 
         ctk.CTkButton(c2, text="Zmień hasło główne", fg_color=COLOR_PRIMARY, command=self._change_pwd).pack(anchor="w", padx=15, pady=(6, 8))
+
+        # O programie i autorze
+        if self.on_open_about:
+            c3 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
+            c3.pack(fill="x", pady=6, ipady=6)
+            row = layout_frame(c3)
+            row.pack(fill="x", padx=15, pady=8)
+            ctk.CTkLabel(row, text=f"ℹ️ KeyStead Manager {APP_VERSION}", font=FONT_SUBTITLE,
+                         text_color=COLOR_TEXT_PRIMARY).pack(side="left")
+            ctk.CTkButton(row, text="O programie i autorze", width=160, fg_color=COLOR_PANEL_DARK,
+                          command=self.on_open_about).pack(side="right")
 
         # Zapisz
         bar = ctk.CTkFrame(self, fg_color=COLOR_CARD_DARK, corner_radius=8, height=50)

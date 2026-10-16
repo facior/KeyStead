@@ -107,6 +107,7 @@ class SyncSession:
         self.last_report_at: Optional[float] = None
         self.policy: Dict[str, Any] = {}
         self.branding: Dict[str, Any] = {}
+        self.server_version = ""  # z odpowiedzi serwera (zgodność wersji, „O programie”)
         self.max_revision = 0  # najwyższy licznik zapisów sejfu widziany na tym urządzeniu (ochrona przed cofnięciem)
         self._rejected_version: Optional[int] = None  # wersja serwera odrzucona jako podsunięta starsza treść
         self.state = SYNCING
@@ -203,6 +204,8 @@ class SyncSession:
             self.policy = info["policy"]
         if isinstance(info.get("branding"), dict):
             self.branding = info["branding"]
+        if isinstance(info.get("server_version"), str):
+            self.server_version = info["server_version"][:20]
         self.last_contact = time.time()
         if os.path.exists(self.cache_path):
             self._save_state()

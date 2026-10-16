@@ -238,6 +238,30 @@ class TestMainViewSmoothness(unittest.TestCase):
         self.root.update()
         self.assertEqual(len(freezes), 1)
 
+    def test_about_view_from_settings_and_window(self):
+        from ui.about_view import AboutView, show_about_window
+
+        def walk(w):
+            for c in w.winfo_children():
+                yield c
+                yield from walk(c)
+        self.view._open_settings_dialog()
+        self.pump(0.5)
+        buttons = [w for w in walk(self.view.drawer.content_container) if isinstance(w, ctk.CTkButton)]
+        about_btn = next(b for b in buttons if b.cget("text") == "O programie i autorze")
+        about_btn.invoke()
+        self.pump(0.5)
+        views = [w for w in walk(self.view.drawer.content_container) if isinstance(w, AboutView)]
+        self.assertEqual(len(views), 1)
+        texts = " ".join(str(w.cget("text")) for w in walk(views[0]) if isinstance(w, (ctk.CTkLabel, ctk.CTkButton)))
+        self.assertIn("Łukasz Kubieniec", texts)
+        self.assertIn("Wszelkie prawa zastrzeżone", texts)
+        win = show_about_window(self.root, server_url="https://vault.firma.pl", server_version="1.6.2")
+        self.pump(0.2)
+        texts = " ".join(str(w.cget("text")) for w in walk(win) if isinstance(w, ctk.CTkLabel))
+        self.assertIn("poproś administratora o aktualizację serwera", texts)
+        win.destroy()
+
     def test_flat_button_click_and_window_breakpoints(self):
         from ui.flat_button import FlatButton
         clicked = []

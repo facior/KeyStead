@@ -9,6 +9,9 @@ from urllib.parse import urlparse
 
 import requests
 
+from core.version import APP_VERSION
+
+
 API = "/api/v1"
 TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
 
@@ -139,7 +142,8 @@ class RemoteVaultClient:
         # Przypięty certyfikat (serwer z certyfikatem samopodpisanym / firmowym) albo systemowy magazyn CA
         self.verify = ca_file if ca_file and os.path.exists(ca_file) else True
         self._session = requests.Session()
-        self._session.headers.update({"Authorization": f"Bearer {token}", "User-Agent": "KeyStead-Desktop"})
+        self._session.headers.update({"Authorization": f"Bearer {token}", "User-Agent": f"KeyStead-Desktop/{APP_VERSION}",
+                                      "X-KeyStead-Version": APP_VERSION})
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         resp = _send(self._session, method, f"{self.base_url}{API}{path}", self.timeout, self.verify, **kwargs)

@@ -101,13 +101,19 @@ class LoginView(ctk.CTkFrame):
         # Dostępność Windows Hello sprawdzana w tle; przyciski pojawiają się, gdy jest zapisane odblokowanie
         quick.check_availability(lambda _ok: self._refresh_hello_buttons(auto=True), widget=self)
 
+    def _show_about(self):
+        from ui.about_view import show_about_window
+        profile = getattr(self, "server_profile", None)
+        show_about_window(self, server_url=profile.url if profile else "")
+
     def _build_ui(self):
         # Wycentrowana karta logowania
         card = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK, corner_radius=16, width=540)
         card.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkLabel(self, text=f"KeyStead Manager {APP_VERSION}", font=FONT_SMALL,
-                     text_color=COLOR_TEXT_MUTED).place(relx=1.0, rely=1.0, anchor="se", x=-14, y=-8)
+        ctk.CTkButton(self, text=f"KeyStead Manager {APP_VERSION}  ·  O programie", font=FONT_SMALL, height=22,
+                      fg_color="transparent", hover_color=COLOR_PANEL_DARK, text_color=COLOR_TEXT_MUTED,
+                      command=self._show_about).place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-6)
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=35, pady=35)

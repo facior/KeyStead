@@ -17,7 +17,7 @@ import customtkinter as ctk
 
 from core import app_update
 from core.generator import evaluate_password_strength
-from core.version import APP_VERSION
+from core.version import APP_VERSION, server_compatibility
 from core.paths import branding_logo_path
 from core.attachments import cleanup_temp_copies
 from core.crypto import Keyring, org_key_id, parse_org_public_key
@@ -545,9 +545,24 @@ class PasswordManagerApp(ctk.CTk):
         view.policy = dict(status.policy or {})
         if status.state == SYNCED:
             self._sync_org_recovery(view, view.policy)
+            self._check_server_version(view)
         if (status.branding or {}) != self._last_branding:
             self._last_branding = dict(status.branding or {})
             self._refresh_branding(view, self._last_branding)
+
+    def _check_server_version(self, view):
+        """Raz na sesję: ostrzeżenie, gdy linia wersji serwera i aplikacji się różni (np. serwer 2.0, aplikacja 2.1)."""
+        session = self.sync_session
+        version = getattr(session, "server_version", "") if session else ""
+        if not version or getattr(self, "_version_warned", None) == version:
+            return
+        self._version_warned = version
+        state = server_compatibility(version)
+        if state == "server_older":
+            view.show_toast(f"Serwer ma starszą wersję ({version}) niż aplikacja ({APP_VERSION}) – "
+                            "poproś administratora o aktualizację serwera.", error=True)
+        elif state == "app_older":
+            view.show_toast(f"Serwer ma nowszą wersję ({version}) – zaktualizuj aplikację.", error=True)
 
     def _handle_access_revoked(self, reason: str):
         """Administrator odciął urządzenie lub zablokował konto: zamknij sejf i usuń dane dostępowe."""
