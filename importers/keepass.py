@@ -15,6 +15,79 @@ try:
 except ImportError:
     HAS_PYKEEPASS = False
 
+# Limity parametrów funkcji wyprowadzania klucza z nagłówka .kdbx – sprawdzane PRZED otwarciem bazy, bo
+# pykeepass liczy klucz jeszcze przed weryfikacją hasła (złośliwy plik mógłby zawiesić aplikację lub zająć GB RAM).
+# Domyślne wartości KeePass/KeePassXC są wielokrotnie mniejsze.
+MAX_KDBX_FILE_BYTES = 200 * 1024 * 1024
+MAX_AES_ROUNDS = 50_000_000
+MAX_ARGON2_MEMORY = 1024 * 1024 * 1024
+MAX_ARGON2_ITERATIONS = 1000
+MAX_ARGON2_PARALLELISM = 64
+_KDBX_SIG = (0x9AA2D903, 0xB54BFB67)
+
+
+def _variant_dict(data: bytes) -> dict:
+    """VariantDictionary z nagłówka KDBX4 (parametry KDF): klucz -> wartość liczbowa/bajty."""
+    import struct
+    out, pos = {}, 2  # 2 bajty wersji
+    while pos < len(data):
+        vtype = data[pos]
+        pos += 1
+        if vtype == 0:
+            break
+        (klen,) = struct.unpack_from("<I", data, pos)
+        pos += 4
+        key = data[pos:pos + klen].decode("utf-8", "replace")
+        pos += klen
+        (vlen,) = struct.unpack_from("<I", data, pos)
+        pos += 4
+        raw = data[pos:pos + vlen]
+        pos += vlen
+        if vtype in (0x04, 0x05) and vlen in (4, 8):      # UInt32 / UInt64
+            out[key] = int.from_bytes(raw, "little")
+        else:
+            out[key] = raw
+    return out
+
+
+def check_kdbx_header(path: str) -> str:
+    """Zwraca opis problemu (plik odrzucony) albo pusty tekst, gdy parametry są rozsądne."""
+    import struct
+    try:
+        if os.path.getsize(path) > MAX_KDBX_FILE_BYTES:
+            return "Plik bazy KeePass jest zbyt duży."
+        with open(path, "rb") as f:
+            head = f.read(64 * 1024)
+        sig1, sig2, minor, major = struct.unpack_from("<IIHH", head, 0)
+        if (sig1, sig2) != _KDBX_SIG:
+            return "To nie jest baza KeePass (.kdbx)."
+        pos, wide = 12, major >= 4
+        while pos < len(head):
+            fid = head[pos]
+            if wide:
+                (size,) = struct.unpack_from("<I", head, pos + 1)
+                pos += 5
+            else:
+                (size,) = struct.unpack_from("<H", head, pos + 1)
+                pos += 3
+            data = head[pos:pos + size]
+            pos += size
+            if fid == 0:
+                break
+            if fid == 6 and len(data) == 8:  # KDBX3: TransformRounds (AES-KDF)
+                if int.from_bytes(data, "little") > MAX_AES_ROUNDS:
+                    return "Baza KeePass ma nierealnie dużą liczbę rund szyfrowania – plik odrzucony."
+            if fid == 11:  # KDBX4: KdfParameters
+                params = _variant_dict(data)
+                if int(params.get("R", 0)) > MAX_AES_ROUNDS:
+                    return "Baza KeePass ma nierealnie dużą liczbę rund szyfrowania – plik odrzucony."
+                if (int(params.get("M", 0)) > MAX_ARGON2_MEMORY or int(params.get("I", 0)) > MAX_ARGON2_ITERATIONS
+                        or int(params.get("P", 0)) > MAX_ARGON2_PARALLELISM):
+                    return "Baza KeePass wymaga nierealnie dużo pamięci lub obliczeń (Argon2) – plik odrzucony."
+        return ""
+    except (OSError, struct.error, IndexError, ValueError):
+        return "Nie udało się odczytać nagłówka bazy KeePass – plik jest uszkodzony."
+
 
 class KeePassImporter(BaseImporter):
     @property
@@ -80,6 +153,11 @@ class KeePassImporter(BaseImporter):
     ) -> None:
         if not password and not keyfile_path:
             result.add_error("Do otwarcia bazy KeePass (.kdbx) wymagane jest hasło lub plik klucza.")
+            return
+
+        problem = check_kdbx_header(file_path)
+        if problem:
+            result.add_error(problem)
             return
 
         try:

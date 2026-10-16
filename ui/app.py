@@ -100,6 +100,9 @@ class UpdateBar(ctk.CTkFrame):
             return
         try:
             app_update.launch_installer(path)
+        except app_update.UpdateError as e:
+            self._failed(str(e))
+            return
         except OSError as e:
             self._failed(f"Nie udało się uruchomić instalatora: {e}")
             return
@@ -455,6 +458,7 @@ class PasswordManagerApp(ctk.CTk):
             return  # firma wyłączyła własne kopie (sejf i tak jest na serwerze z historią wersji)
 
         settings_copy = copy.deepcopy(self.current_vault.settings.get("backup_destinations", {}))
+        original = copy.deepcopy(settings_copy)  # stan z chwili startu – wykrycie zmiany konta w trakcie backupu
         vault_path = self.vault_file_path
         view = self._current_view
 
@@ -471,7 +475,7 @@ class PasswordManagerApp(ctk.CTk):
                     error = None
 
             try:
-                self.after(0, lambda: self._persist_runtime_state(view, settings_copy))
+                self.after(0, lambda: self._persist_runtime_state(view, settings_copy, original))
             except Exception:
                 pass
 
@@ -485,12 +489,12 @@ class PasswordManagerApp(ctk.CTk):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _persist_runtime_state(self, view, settings_copy):
+    def _persist_runtime_state(self, view, settings_copy, original=None):
         """Zapisuje w sejfie tokeny OAuth odświeżone podczas backupu w tle."""
         if view is not self._current_view or not isinstance(view, MainView) or not self.current_vault:
             return
         dest = self.current_vault.settings.get("backup_destinations", {})
-        if merge_runtime_state(dest, settings_copy):
+        if merge_runtime_state(dest, settings_copy, original):
             view._save_vault_to_disk(trigger_backup=False)
 
     def _report_backup_failure(self, view, message: str):

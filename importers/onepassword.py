@@ -11,7 +11,7 @@ from importers.base import BaseImporter, ImportResult, ImportItem
 from core.totp_service import parse_otpauth_uri, sanitize_secret
 
 
-MAX_EXPORT_DATA_BYTES = 200 * 1024 * 1024
+MAX_EXPORT_DATA_BYTES = 50 * 1024 * 1024  # JSON 200 MB to kilka GB obiektów Pythona – realne eksporty są dużo mniejsze
 
 CATEGORY_MAP = {
     "001": "Loginy",

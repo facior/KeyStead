@@ -35,16 +35,31 @@ class DiscoveredServer:
 
 
 def find_tailscale_cli() -> Optional[str]:
-    found = shutil.which("tailscale")
-    if found:
-        return found
+    # Najpierw stałe ścieżki instalacji – plik „tailscale.exe” podrzucony w katalogu z PATH nie zostanie użyty
     if sys.platform == "win32":
         for path in _WINDOWS_PATHS:
             if os.path.exists(path):
                 return path
     if sys.platform == "darwin" and os.path.exists("/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
         return "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-    return None
+    return shutil.which("tailscale")
+
+
+_running_cache = {"at": 0.0, "value": False}
+
+
+def tailscale_running(max_age: float = 60.0) -> bool:
+    """Czy Tailscale na tym komputerze jest połączony (wynik pamiętany przez minutę)."""
+    import time
+    now = time.monotonic()
+    if now - _running_cache["at"] < max_age and _running_cache["at"]:
+        return _running_cache["value"]
+    try:
+        value = _status().get("BackendState") in (None, "Running")
+    except TailscaleUnavailable:
+        value = False
+    _running_cache.update(at=now, value=value)
+    return value
 
 
 def _status() -> dict:

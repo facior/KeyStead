@@ -13,11 +13,18 @@ CLIPBOARD_CHOICES: List[Tuple[str, int]] = [("10 sekund", 10), ("30 sekund", 30)
 SCORE_LABELS = {0: "bez wymagań", 1: "słabe", 2: "średnie", 3: "silne", 4: "bardzo silne"}
 
 
+# Sensowne zakresy limitów z serwera. Wartość spoza zakresu (np. ujemna) znaczy „bez limitu” – inaczej
+# złośliwy serwer mógłby ustawić -1 i wyłączyć tym automatyczną blokadę oraz czyszczenie schowka.
+_LIMIT_RANGES = {"max_auto_lock_minutes": (1, 1440), "max_clipboard_seconds": (5, 600)}
+
+
 def _limit(policy: Dict[str, Any], key: str) -> int:
     try:
-        return int((policy or {}).get(key) or 0)
-    except (TypeError, ValueError):
+        value = int((policy or {}).get(key) or 0)
+    except (TypeError, ValueError, OverflowError):
         return 0
+    low, high = _LIMIT_RANGES.get(key, (1, 10 ** 6))
+    return value if low <= value <= high else 0
 
 
 def effective_auto_lock(user_minutes: int, policy: Dict[str, Any]) -> int:

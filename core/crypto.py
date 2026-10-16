@@ -97,6 +97,9 @@ def encrypt_payload(
     [12B: nonce]
     [NB: szyfrogram + tag GCM]
     """
+    if keyfile_bytes is not None and len(keyfile_bytes) == 0:
+        # Pusty plik-klucz nic nie dodaje do bezpieczeństwa – użytkownik myślałby, że ma drugi składnik
+        raise CryptoError("Wybrany plik-klucz jest pusty – wybierz inny plik (np. wygeneruj nowy plik-klucz).")
     salt = os.urandom(SALT_LEN)
     nonce = os.urandom(NONCE_LEN)
 

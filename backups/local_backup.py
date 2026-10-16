@@ -4,6 +4,7 @@ Automatycznie dodaje znacznik czasu oraz rotuje stare kopie.
 """
 
 import os
+import re
 import shutil
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
@@ -99,10 +100,10 @@ class LocalBackupProvider(BaseBackupProvider):
 
     def _rotate_backups(self, dest_dir: str, base_name: str, keep_count: int) -> None:
         try:
-            files = [
-                os.path.join(dest_dir, f) for f in os.listdir(dest_dir)
-                if f.startswith(f"{base_name}_backup_") and f.endswith(".vault")
-            ]
+            # Dokładnie „<nazwa>_backup_RRRRMMDD_GGMMSS.vault” – rotacja nie usunie kopii innego sejfu
+            # o podobnej nazwie (np. „a_backup_X”) zapisanych w tym samym folderze
+            pattern = re.compile(rf"^{re.escape(base_name)}_backup_\d{{8}}_\d{{6}}\.vault$")
+            files = [os.path.join(dest_dir, f) for f in os.listdir(dest_dir) if pattern.match(f)]
             files.sort(key=os.path.getmtime, reverse=True)
             if len(files) > keep_count:
                 for old_file in files[keep_count:]:

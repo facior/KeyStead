@@ -66,7 +66,29 @@ def _detail(resp: requests.Response) -> str:
         return resp.text[:200]
 
 
+def _plain_http_over_tailnet(url: str) -> bool:
+    """http:// do adresu Tailscale – bezpieczne TYLKO, gdy ruch faktycznie idzie tunelem Tailscale."""
+    parsed = urlparse(url)
+    if parsed.scheme != "http":
+        return False
+    host = (parsed.hostname or "").lower()
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
 def _send(session: requests.Session, method: str, url: str, timeout: float, verify, **kwargs) -> requests.Response:
+    if _plain_http_over_tailnet(url):
+        from sync.tailscale import tailscale_running
+        if not tailscale_running():
+            # Bez działającego Tailscale adres 100.x / *.ts.net trafiłby otwartym tekstem do sieci dostawcy lub
+            # lokalnego DNS – token urządzenia i sejf nie mogą tam wyjść. Traktujemy jak brak połączenia.
+            raise NetworkError("Tailscale nie jest połączony – połączenie http:// byłoby nieszyfrowane. "
+                               "Włącz Tailscale i spróbuj ponownie.")
+        session.trust_env = False  # z pominięciem systemowego proxy: ruch musi iść tunelem Tailscale
     try:
         # Ustawienia proxy systemu (także firmowe proxy z rejestru Windows) są uwzględniane automatycznie
         return session.request(method, url, timeout=timeout, verify=verify, **kwargs)
@@ -180,11 +202,28 @@ class RemoteVaultClient:
         resp = _send(self._session, "POST", f"{self.base_url}{API}/report", self.timeout, self.verify, json=report)
         return resp.status_code == 200
 
-    def fetch_logo(self) -> Optional[bytes]:
+    def fetch_logo(self, max_bytes: int = 512 * 1024) -> Optional[bytes]:
         try:
-            resp = _send(self._session, "GET", f"{self.base_url}{API}/branding/logo", self.timeout, self.verify)
+            resp = _send(self._session, "GET", f"{self.base_url}{API}/branding/logo", self.timeout, self.verify,
+                         stream=True)
         except SyncError:
             return None
-        if resp.status_code == 200 and resp.content.startswith(b"\x89PNG"):
-            return resp.content
-        return None
+        try:
+            if resp.status_code != 200:
+                return None
+            data = resp.raw.read(max_bytes + 1, decode_content=True)  # limit – logo z serwera nie zapcha pamięci
+        except Exception:
+            return None
+        finally:
+            resp.close()
+        if len(data) > max_bytes or not data.startswith(b"\x89PNG"):
+            return None
+        try:
+            from PIL import Image
+            import io
+            with Image.open(io.BytesIO(data)) as img:
+                if img.width * img.height > 4_000_000:  # „bomba” w małym pliku PNG
+                    return None
+        except Exception:
+            return None
+        return data

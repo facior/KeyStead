@@ -22,7 +22,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from core.crypto import CryptoError, compute_sha256
+from core.crypto import CryptoError, compute_sha256, encrypt_payload
 from core.storage import vault_from_blob, write_encrypted_file
 from core.vault import Vault
 from sync.client import AuthError, ConflictError, NetworkError, RemoteVaultClient, SyncError
@@ -97,6 +97,8 @@ class SyncSession:
         self.last_report_at: Optional[float] = None
         self.policy: Dict[str, Any] = {}
         self.branding: Dict[str, Any] = {}
+        self.max_revision = 0  # najwyższy licznik zapisów sejfu widziany na tym urządzeniu (ochrona przed cofnięciem)
+        self._rejected_version: Optional[int] = None  # wersja serwera odrzucona jako podsunięta starsza treść
         self.state = SYNCING
         self.message = "Łączenie z serwerem..."
 
@@ -141,13 +143,32 @@ class SyncSession:
         self.policy = data.get("policy") or {}
         self.branding = data.get("branding") or {}
         self.last_report_at = data.get("last_report_at")
+        try:
+            self.max_revision = max(self.max_revision, int(data.get("max_revision", 0) or 0))
+        except (TypeError, ValueError):
+            pass
 
     def _save_state(self) -> None:
         os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
         with open(self._state_path, "w", encoding="utf-8") as f:
             json.dump({"base_version": self.base_version, "pending": self.pending, "last_sync": self.last_sync,
                        "last_contact": self.last_contact, "policy": self.policy, "branding": self.branding,
-                       "last_report_at": self.last_report_at}, f)
+                       "last_report_at": self.last_report_at, "max_revision": self.max_revision}, f)
+
+    def _seen_revision(self, revision: int) -> None:
+        self.max_revision = max(self.max_revision, int(revision or 0))
+
+    def next_revision(self, current: int) -> int:
+        """Licznik dla nowego zapisu – zawsze wyższy od wszystkiego, co to urządzenie widziało."""
+        return max(int(current or 0), self.max_revision) + 1
+
+    def _is_rollback(self, vault: Vault) -> bool:
+        """Czy pobrana zawartość jest STARSZA niż już widziana (serwer podsunął wcześniejszą wersję)."""
+        return self.max_revision > 0 and int(getattr(vault, "revision", 0) or 0) < self.max_revision
+
+    ROLLBACK_MESSAGE = ("Serwer przesłał STARSZĄ zawartość sejfu niż ta, którą to urządzenie już widziało – nie została "
+                        "wczytana. Jeśli administrator na Twoją prośbę przywrócił poprzednią wersję, wybierz w panelu "
+                        "synchronizacji „Pobierz wersję z serwera”. W przeciwnym razie zgłoś to administratorowi.")
 
     def report_due(self, interval_hours: int = 24) -> bool:
         if not (self.policy or {}).get("security_report"):
@@ -273,6 +294,7 @@ class SyncSession:
 
         if has_cache and remote["version"] == self.base_version:
             vault = self._decrypt(self._read_cache())
+            self._seen_revision(vault.revision)
             if self.pending:
                 self._push()  # niewysłane zmiany z poprzedniej sesji
             else:
@@ -294,7 +316,14 @@ class SyncSession:
 
         blob, version = self.client.download()
         vault = self._decrypt(blob)  # najpierw weryfikacja hasła, potem nadpisanie lokalnej kopii
+        if has_cache:
+            cached = self._decrypt(self._read_cache())
+            self._seen_revision(cached.revision)
+            if self._is_rollback(vault):
+                self._set(ERROR, self.ROLLBACK_MESSAGE)
+                return cached  # pracujemy na własnej, nowszej kopii
         write_encrypted_file(self.cache_path, blob)
+        self._seen_revision(vault.revision)
         self._mark_synced(version)
         return vault
 
@@ -310,14 +339,16 @@ class SyncSession:
         return meta
 
     # ------------------------------------------------------------ zapis i wysyłanie
-    def queue_save(self, encrypted_blob) -> Future:
+    def queue_save(self, encrypted_blob, revision: Optional[int] = None) -> Future:
         """
         Zapisuje zaszyfrowany sejf do lokalnej kopii i wysyła go na serwer – w tle, w kolejności zapisów.
         Wywoływane z wątku UI (nie blokuje). `encrypted_blob` to gotowe bajty albo funkcja, która je
-        utworzy – wtedy kosztowne szyfrowanie też odbywa się w tle.
+        utworzy – wtedy kosztowne szyfrowanie też odbywa się w tle. `revision` – licznik zapisu z treści sejfu.
         """
         with self._queued_lock:
             self._queued_saves += 1
+        if revision:
+            self._seen_revision(revision)
         if self.state not in (CONFLICT, OFFLINE, REVOKED):
             self._set(PENDING, "Zapisywanie zmian...")
         return self._submit(self._save_and_push, encrypted_blob)
@@ -409,6 +440,9 @@ class SyncSession:
             self.last_sync = time.time()
             self._set(SYNCED, "Zsynchronizowano")
             return None
+        if remote["version"] == self._rejected_version:
+            self._set(ERROR, self.ROLLBACK_MESSAGE)  # ta sama podsunięta wersja – bez ponownego pobierania
+            return None
 
         self._set(SYNCING, "Pobieranie zmian z serwera...")
         try:
@@ -420,6 +454,10 @@ class SyncSession:
         except CryptoError:
             self._set(ERROR, "Nie można odszyfrować nowej wersji – hasło główne zostało zmienione na innym "
                              "urządzeniu. Zablokuj sejf i odblokuj go nowym hasłem.")
+            return None
+        if self._is_rollback(vault):
+            self._rejected_version = version
+            self._set(ERROR, self.ROLLBACK_MESSAGE)
             return None
         self._set(SYNCING, "Wczytywanie zmian...")
         return RemoteUpdate(vault, blob, version, remote.get("updated_by", "?"))
@@ -433,6 +471,7 @@ class SyncSession:
         if self.pending or self.state == CONFLICT:
             return
         write_encrypted_file(self.cache_path, update.blob)
+        self._seen_revision(update.vault.revision)
         self._mark_synced(update.version, f"Pobrano zmiany z urządzenia „{update.updated_by}”")
 
     # ------------------------------------------------------------ konflikty i historia
@@ -441,9 +480,11 @@ class SyncSession:
         return self._run(self._resolve_use_server)
 
     def _resolve_use_server(self) -> Vault:
+        """Świadoma decyzja użytkownika – przyjmuje wersję z serwera, także starszą (np. przywróconą przez administratora)."""
         blob, version = self.client.download()
         vault = self._decrypt(blob)
         write_encrypted_file(self.cache_path, blob)
+        self.max_revision = int(vault.revision or 0)
         self._mark_synced(version, "Pobrano wersję z serwera")
         return vault
 
@@ -468,6 +509,10 @@ class SyncSession:
     def _restore_version(self, version: int) -> Vault:
         blob, _ = self.client.download(version)
         vault = self._decrypt(blob)
+        # Przywrócona treść dostaje nowy, najwyższy licznik – inne urządzenia przyjmą ją jako zwykłą zmianę
+        vault.revision = self.next_revision(vault.revision)
+        blob = encrypt_payload(vault.to_json().encode("utf-8"), self._password, self._keyfile)
+        self._seen_revision(vault.revision)
         info = self.client.meta()
         base = info["meta"]["version"] if info.get("meta") else 0
         meta = self.client.upload(blob, base)

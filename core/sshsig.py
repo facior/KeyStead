@@ -71,6 +71,8 @@ def verify(public_key_line: str, message: bytes, armored_signature: bytes, names
     reserved, pos = _read_string(sig, pos)
     hash_alg, pos = _read_string(sig, pos)
     signature, pos = _read_string(sig, pos)
+    if pos != len(sig):
+        raise SignatureError("Nadmiarowe dane w podpisie.")
 
     if key_blob != trusted_blob:
         raise SignatureError("Podpis złożony innym kluczem niż klucz wydawcy.")
@@ -84,8 +86,8 @@ def verify(public_key_line: str, message: bytes, armored_signature: bytes, names
         raise SignatureError("Nieobsługiwany algorytm skrótu.")
 
     sig_type, p = _read_string(signature, 0)
-    raw_sig, _ = _read_string(signature, p)
-    if sig_type != b"ssh-ed25519":
+    raw_sig, p = _read_string(signature, p)
+    if sig_type != b"ssh-ed25519" or len(raw_sig) != 64 or p != len(signature):
         raise SignatureError("Nieobsługiwany typ podpisu.")
 
     signed = MAGIC + _string(sig_namespace) + _string(reserved) + _string(hash_alg) + _string(digest)

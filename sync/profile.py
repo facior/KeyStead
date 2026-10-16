@@ -23,7 +23,8 @@ class ServerProfile:
 
     def cache_path(self) -> str:
         """Lokalna, zaszyfrowana kopia sejfu z serwera (praca offline + źródło kopii zapasowych)."""
-        suffix = (self.server_id or "nowy")[:12]
+        # Identyfikator pochodzi z serwera – w nazwie pliku tylko litery i cyfry (bez „..”, „/”, „:”)
+        suffix = "".join(c for c in (self.server_id or "") if c.isascii() and c.isalnum())[:12] or "nowy"
         return os.path.join(self.cache_dir or CACHE_DIR, f"SejfSerwer_{suffix}.vault")
 
 

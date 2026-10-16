@@ -14,6 +14,8 @@ trzymane w ~/.keystead/config.json (sekcja "oauth_clients").
 
 import base64
 import hashlib
+import hmac
+import html
 import json
 import os
 import secrets
@@ -133,21 +135,26 @@ def _wait_for_redirect(host: str, expected_state: str, cancel_event: threading.E
     result: Dict[str, str] = {}
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = 5  # zawieszone połączenie nie blokuje anulowania ani limitu czasu logowania
+
         def do_GET(self):  # noqa: N802 (nazwa wymagana przez BaseHTTPRequestHandler)
             params = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
-            if "code" not in params and "error" not in params:
-                self.send_response(404)
+            # Odpowiedź bez właściwego `state` (np. obrazek z obcej strony) jest ignorowana – nie przerywa logowania
+            if ("code" not in params and "error" not in params) or \
+                    not hmac.compare_digest(params.get("state", ""), expected_state):
+                self.send_response(400)
                 self.end_headers()
                 return
             result.update(params)
-            ok = "code" in params and params.get("state") == expected_state
+            ok = "code" in params
             page = _SUCCESS_PAGE.format(
                 title="✅ Zalogowano pomyślnie" if ok else "❌ Logowanie nieudane",
                 message="Możesz zamknąć tę kartę i wrócić do KeyStead Manager." if ok
-                else params.get("error_description") or params.get("error") or "Nieprawidłowa odpowiedź."
+                else html.escape(params.get("error_description") or params.get("error") or "Nieprawidłowa odpowiedź.")
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)

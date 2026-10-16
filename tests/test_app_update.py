@@ -67,6 +67,15 @@ class TestSshSig(unittest.TestCase):
             with self.assertRaises(sshsig.SignatureError, msg=label):
                 sshsig.verify(self.pub, msg, sig, ns)
 
+    def test_trailing_data_rejected(self):
+        import base64
+        armored = sign(self.key, b"hello").decode()
+        body = "".join(armored.splitlines()[1:-1])
+        blob = base64.b64decode(body) + b"\x00\x00\x00\x01X"
+        bad = "-----BEGIN SSH SIGNATURE-----\n" + base64.b64encode(blob).decode() + "\n-----END SSH SIGNATURE-----\n"
+        with self.assertRaises(sshsig.SignatureError):
+            sshsig.verify(self.pub, b"hello", bad.encode(), NS)
+
     def test_bit_flip_in_signature(self):
         sig = bytearray(sign(self.key, b"hello"))
         lines = sig.split(b"\n")
@@ -118,26 +127,62 @@ class FakeHttp:
         return r if r is not None else FakeResponse(404)
 
 
-def gh_release(tag, assets=(), draft=False, prerelease=False):
-    return {"tag_name": tag, "draft": draft, "prerelease": prerelease, "html_url": f"https://gh/{tag}", "body": "",
-            "assets": [{"name": n, "browser_download_url": f"https://dl/{n}"} for n in assets]}
+def gh_release(tag, assets=(), draft=False, prerelease=False, html_url=None):
+    return {"tag_name": tag, "draft": draft, "prerelease": prerelease,
+            "html_url": html_url or f"https://github.com/{app_update.REPOSITORY}/releases/tag/{tag}", "body": "",
+            "assets": [{"name": n, "browser_download_url": f"https://dl/{tag}/{n}"} for n in assets]}
 
 
+@unittest.skipUnless(SSH_KEYGEN, "brak ssh-keygen")
 class TestCheck(unittest.TestCase):
     API = f"https://api.github.com/repos/{app_update.REPOSITORY}/releases"
 
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.key, cls.pub = make_key(cls.tmp)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def signed(self, tag, sign_with=None, **kw):
+        """Wydanie z podpisaną listą SHA256SUMS (jak publikuje tools/release_app.py)."""
+        ver = tag[1:]
+        names = asset_names(ver)
+        rel = gh_release(tag, assets=names.values(), **kw)
+        sums = f"{'ab' * 32}  {names['setup']}\n".encode()
+        self.routes[f"https://dl/{tag}/{names['sums']}"] = FakeResponse(content=sums)
+        self.routes[f"https://dl/{tag}/{names['sig']}"] = FakeResponse(content=sign(sign_with or self.key, sums))
+        return rel
+
+    def setUp(self):
+        self.routes = {}
+
     def check(self, releases, current="1.0.0"):
-        return app_update.check_for_update(current, http=FakeHttp({self.API: FakeResponse(json_data=releases)}))
+        self.routes[self.API] = FakeResponse(json_data=releases)
+        return app_update.check_for_update(current, http=FakeHttp(self.routes), public_key=self.pub)
 
     def test_picks_highest_release(self):
-        rel = self.check([gh_release("v1.2.0"), gh_release("v1.10.0"), gh_release("nightly"),
+        rel = self.check([self.signed("v1.2.0"), self.signed("v1.10.0"), gh_release("nightly"),
                           gh_release("v2.0.0", prerelease=True), gh_release("v3.0.0", draft=True),
                           gh_release("vX"), gh_release("v1.2")])
         self.assertEqual(rel.version, "1.10.0")  # szkice, wydania testowe i nietypowe tagi pomijane
 
     def test_no_update(self):
-        self.assertIsNone(self.check([gh_release("v1.0.0"), gh_release("v0.9.0")]))
+        self.assertIsNone(self.check([self.signed("v1.0.0"), self.signed("v0.9.0")]))
         self.assertIsNone(self.check([]))
+
+    def test_unsigned_or_foreign_signed_release_not_offered(self):
+        self.assertIsNone(self.check([gh_release("v9.0.0")]))  # brak podpisanej listy
+        other_key, _ = make_key(self.tmp, "intruz")
+        self.assertIsNone(self.check([self.signed("v9.0.0", sign_with=other_key)]))
+
+    def test_page_url_restricted_to_release_page(self):
+        rel = self.check([self.signed("v2.0.0", html_url=r"\\attacker.example\share\evil.exe")])
+        self.assertEqual(rel.page_url, f"https://github.com/{app_update.REPOSITORY}/releases/latest")
+        rel = self.check([self.signed("v2.0.0")])
+        self.assertEqual(rel.page_url, f"https://github.com/{app_update.REPOSITORY}/releases/tag/v2.0.0")
 
     def test_github_error(self):
         with self.assertRaises(UpdateError):
@@ -195,6 +240,15 @@ class TestDownload(unittest.TestCase):
         sums = b"abc  keystead-server-1.2.1.tar.gz\n"
         with self.assertRaisesRegex(UpdateError, "nie zawiera instalatora"):
             self.download(self.http(sums=sums))
+
+    def test_installer_swapped_after_verification_not_launched(self):
+        path = self.download(self.http())
+        with open(path, "ab") as f:
+            f.write(b"podmiana")  # inny proces podmienia plik w %TEMP% przed uruchomieniem
+        with self.assertRaisesRegex(UpdateError, "zmienił się"):
+            app_update.launch_installer(path)
+        with self.assertRaisesRegex(UpdateError, "zmienił się"):
+            app_update.launch_installer(os.path.join(self.tmp, "nieznany.exe"))
 
     def test_missing_assets(self):
         self.release.assets.pop(self.names["sig"])

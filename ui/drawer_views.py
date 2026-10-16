@@ -816,9 +816,10 @@ class BackupDrawerView(ctk.CTkFrame):
             if btn.winfo_exists():
                 btn.configure(state="disabled" if busy else "normal")
 
-    def _persist_runtime(self, key: str, cfg: Dict[str, Any]):
+    def _persist_runtime(self, key: str, cfg: Dict[str, Any], original: Optional[Dict[str, Any]] = None):
         """Zapisuje w sejfie tokeny odświeżone podczas operacji w tle."""
-        if merge_runtime_state(self._dest(), {key: cfg}) and self.on_saved:
+        if merge_runtime_state(self._dest(), {key: cfg}, {key: original} if original is not None else None) \
+                and self.on_saved:
             self.on_saved()
 
     # ------------------------------------------------------------- logowanie
@@ -895,6 +896,7 @@ class BackupDrawerView(ctk.CTkFrame):
     def _test(self, key: str):
         self._apply_settings()
         cfg = copy.deepcopy(self._dest().get(key, {}))
+        original = copy.deepcopy(cfg)
         if key == "webdav" and not cfg.get("url"):
             messagebox.showerror("Brak konfiguracji", "Podaj adres serwera WebDAV.")
             return
@@ -905,7 +907,7 @@ class BackupDrawerView(ctk.CTkFrame):
             if isinstance(res, Exception):
                 messagebox.showerror("Test połączenia", str(res))
                 return
-            self._persist_runtime(key, cfg)
+            self._persist_runtime(key, cfg, original)
             ok, msg = res
             (messagebox.showinfo if ok else messagebox.showerror)("Test połączenia", msg)
 
@@ -914,6 +916,7 @@ class BackupDrawerView(ctk.CTkFrame):
     def _run_backup(self, p_key: str):
         self._apply_settings()
         cfg = copy.deepcopy(self._dest().get(p_key, {}))
+        original = copy.deepcopy(cfg)
         if not self.mgr.get_provider(p_key).is_configured(cfg):
             messagebox.showerror("Brak konfiguracji", "Zaloguj się lub uzupełnij najpierw dane tej lokalizacji kopii.")
             return
@@ -929,7 +932,7 @@ class BackupDrawerView(ctk.CTkFrame):
             if isinstance(status, Exception):
                 messagebox.showerror("Błąd", f"Nie udało się utworzyć kopii:\n{status}")
                 return
-            self._persist_runtime(p_key, cfg)
+            self._persist_runtime(p_key, cfg, original)
             if status.success:
                 messagebox.showinfo("Kopia utworzona", f"Pomyślnie utworzono kopię:\n{status.destination_path}")
             else:
@@ -940,6 +943,7 @@ class BackupDrawerView(ctk.CTkFrame):
     def _run_all(self):
         self._apply_settings()
         dest = copy.deepcopy(self._dest())
+        original = copy.deepcopy(dest)
         vault_path = self.vault_file_path
         self._set_busy(True)
 
@@ -952,7 +956,7 @@ class BackupDrawerView(ctk.CTkFrame):
             if isinstance(res, Exception):
                 messagebox.showerror("Kopie zapasowe", f"Błąd: {res}")
                 return
-            if merge_runtime_state(self._dest(), dest) and self.on_saved:
+            if merge_runtime_state(self._dest(), dest, original) and self.on_saved:
                 self.on_saved()
             if not res:
                 messagebox.showwarning("Kopie zapasowe", "Nie skonfigurowano żadnej lokalizacji kopii zapasowych.")
@@ -1090,7 +1094,11 @@ class ImportDrawerView(ctk.CTkFrame):
             return
 
         strategy = self._strategies.get(self.strategy_combo.get(), STRATEGY_SKIP)
-        stats = apply_import(self.vault, self._analysis_result.items, strategy)
+        try:
+            stats = apply_import(self.vault, self._analysis_result.items, strategy)
+        except Exception as e:
+            messagebox.showerror("Import przerwany", f"Nie udało się zaimportować danych: {e}")
+            return
         self._analysis_result = None
         self.import_btn.configure(state="disabled")
 

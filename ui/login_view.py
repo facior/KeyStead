@@ -6,6 +6,7 @@ import os
 import json
 import socket
 import threading
+from urllib.parse import urlparse
 from typing import Optional, Callable, List
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -669,6 +670,17 @@ class LoginView(ctk.CTkFrame):
                 text="❌ Certyfikat serwera jest zaufany, ale nie pasuje do adresu, pod którym się łączysz. "
                      "Użyj dokładnie adresu wypisanego przez instalator (np. https://192.168.0.10:8443)."
             )
+            return
+        host = (urlparse(profile.url).hostname or "").lower()
+        known_by_system = bool(self.server_profile and self.server_profile.url == profile.url
+                               and self.server_profile.token and not pinned_fp)
+        if host.endswith(".ts.net") or known_by_system:
+            # Ten serwer miał certyfikat zaufany przez system (Tailscale / publiczne CA). Nagle niezaufany certyfikat
+            # to najpewniej przechwycenie połączenia – nie proponujemy „zaufaj temu certyfikatowi”.
+            self.error_label.configure(
+                text="❌ Serwer przedstawił certyfikat, któremu system nie ufa, choć wcześniej był on zaufany. "
+                     "Możliwa próba przechwycenia połączenia (np. publiczne Wi-Fi) – połączenie przerwane. "
+                     "Spróbuj z innej sieci lub skontaktuj się z administratorem.")
             return
         changed = bool(pinned_fp)
         title = "⚠️ Certyfikat serwera się zmienił" if changed else "Nowy certyfikat serwera"

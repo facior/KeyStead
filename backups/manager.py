@@ -35,19 +35,25 @@ CLOUD_KEYS = ("google_drive", "onedrive", "dropbox")
 _RUNTIME_STATE_KEYS = ("oauth", "folder_id")
 
 
-def merge_runtime_state(target: Dict[str, Any], source: Dict[str, Any]) -> bool:
+def merge_runtime_state(target: Dict[str, Any], source: Dict[str, Any],
+                        original: Optional[Dict[str, Any]] = None) -> bool:
     """
     Przenosi stan zmieniony podczas backupu (odświeżone tokeny OAuth, ID folderu w chmurze)
     z kopii ustawień użytej w wątku roboczym do ustawień sejfu. Zwraca True, jeśli coś się zmieniło.
+    `original` – ustawienia z chwili rozpoczęcia backupu: gdy użytkownik w międzyczasie wylogował się
+    lub zalogował na INNE konto, tokeny starego konta nie mogą wrócić.
     """
     changed = False
     for key in CLOUD_KEYS:
         src, dst = source.get(key) or {}, target.get(key)
         if dst is None:
             continue
+        live_token = (dst.get("oauth") or {}).get("refresh_token")
         # Nie przywracaj tokenów, jeśli użytkownik w międzyczasie się wylogował
-        if not (dst.get("oauth") or {}).get("refresh_token") and (src.get("oauth") or {}).get("refresh_token"):
+        if not live_token and (src.get("oauth") or {}).get("refresh_token"):
             continue
+        if original is not None and live_token != ((original.get(key) or {}).get("oauth") or {}).get("refresh_token"):
+            continue  # konto zmienione w trakcie backupu – zostaje nowe
         for field in _RUNTIME_STATE_KEYS:
             if field in src and src[field] != dst.get(field):
                 dst[field] = src[field]

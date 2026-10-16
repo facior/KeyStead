@@ -75,7 +75,7 @@ def can_self_install() -> bool:
 
 # --------------------------------------------------------------------- sprawdzanie
 def check_for_update(current: str = APP_VERSION, repository: str = REPOSITORY, timeout: float = 15,
-                     http=requests) -> Optional[AppRelease]:
+                     http=requests, public_key: str = RELEASE_PUBLIC_KEY) -> Optional[AppRelease]:
     """Najnowsze wydanie aplikacji, jeśli jest nowsze od `current` – w przeciwnym razie None."""
     # KEYSTEAD_UPDATE_API: inne źródło listy wydań (testy, firmowy serwer lustrzany). Bezpieczne, bo podpis
     # wydawcy jest wymagany niezależnie od źródła.
@@ -94,7 +94,39 @@ def check_for_update(current: str = APP_VERSION, repository: str = REPOSITORY, t
             best = AppRelease(ver, rel.get("html_url", ""), rel.get("body") or "",
                               {a.get("name"): a.get("browser_download_url") for a in rel.get("assets", [])})
     cur = version_tuple(current) or (0, 0, 0)
-    return best if best and version_tuple(best.version) > cur else None
+    if not best or version_tuple(best.version) <= cur:
+        return None
+    # Pasek „Dostępna nowa wersja” tylko dla wydania z POPRAWNYM podpisem wydawcy – samo przejęcie konta GitHub
+    # (bez klucza) nie wystarczy, by podsunąć użytkownikowi fałszywą aktualizację ani link do niej
+    try:
+        sums, sig = _fetch_signed_list(best, http)
+        verify_sums(sums, sig, public_key)
+        expected_hash(sums, asset_names(best.version)["setup"])
+    except UpdateError:
+        return None
+    best.page_url = safe_page_url(best.page_url, repository)
+    return best
+
+
+def safe_page_url(url: str, repository: str = REPOSITORY) -> str:
+    """Link „Co nowego / Pobierz” tylko do strony wydań w repozytorium aplikacji (nie z niepodpisanych danych)."""
+    prefix = f"https://github.com/{repository}/releases/"
+    return url if isinstance(url, str) and url.startswith(prefix) and re.match(r"^[\w:/.\-]+$", url) \
+        else f"https://github.com/{repository}/releases/latest"
+
+
+def _fetch_signed_list(release: "AppRelease", http=requests):
+    names = asset_names(release.version)
+    out = []
+    for key in ("sums", "sig"):
+        url = release.assets.get(names[key])
+        if not url:
+            raise UpdateError(f"Wydanie nie zawiera pliku {names[key]}.")
+        r = http.get(url, timeout=30, headers={"User-Agent": "KeyStead-Manager"})
+        if r.status_code != 200 or len(r.content) > 64 * 1024:
+            raise UpdateError(f"Nie udało się pobrać {names[key]}.")
+        out.append(r.content)
+    return out[0], out[1]
 
 
 # --------------------------------------------------------------------- pobieranie i weryfikacja
@@ -122,14 +154,8 @@ def download_update(release: AppRelease, dest_dir: Optional[str] = None,
     if missing:
         raise UpdateError(f"Wydanie nie zawiera plików: {', '.join(missing)}.")
 
-    def _small(name):
-        r = http.get(release.assets[name], timeout=30, headers={"User-Agent": "KeyStead-Manager"})
-        if r.status_code != 200 or len(r.content) > 64 * 1024:
-            raise UpdateError(f"Nie udało się pobrać {name}.")
-        return r.content
-
-    sums = _small(names["sums"])
-    verify_sums(sums, _small(names["sig"]), public_key)
+    sums, sig = _fetch_signed_list(release, http)
+    verify_sums(sums, sig, public_key)
     want = expected_hash(sums, names["setup"])
 
     dest_dir = dest_dir or os.path.join(tempfile.gettempdir(), "KeyStead-update")
@@ -156,11 +182,27 @@ def download_update(release: AppRelease, dest_dir: Optional[str] = None,
         os.remove(part)
         raise UpdateError("Suma kontrolna instalatora nie zgadza się z podpisaną listą – instalacja odrzucona.")
     os.replace(part, target)
+    _verified[os.path.abspath(target)] = want
     return target
+
+
+_verified: Dict[str, str] = {}  # ścieżka zweryfikowanego instalatora -> oczekiwana suma SHA-256
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def launch_installer(path: str) -> None:
     """Uruchamia instalator w trybie cichym; po instalacji uruchamia on aplikację ponownie."""
+    # Ponowna kontrola tuż przed uruchomieniem: plik w %TEMP% mógł zostać podmieniony po pobraniu
+    want = _verified.get(os.path.abspath(path))
+    if not want or _sha256_file(path) != want:
+        raise UpdateError("Plik instalatora zmienił się po weryfikacji – instalacja przerwana.")
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

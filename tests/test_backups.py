@@ -48,9 +48,15 @@ class TestBackups(unittest.TestCase):
         provider = LocalBackupProvider()
         config = {"folder_path": self.backup_dir, "max_backups": 3}
 
-        # Stworzenie 5 kopii zapasowych
-        for i in range(5):
-            provider.upload_backup(self.vault_file, config, custom_filename=f"test_backup_{i}.vault")
+        # 4 starsze kopie w formacie nadawanym przez aplikację (<sejf>_backup_RRRRMMDD_GGMMSS.vault)
+        base = os.path.splitext(os.path.basename(self.vault_file))[0]
+        os.makedirs(self.backup_dir, exist_ok=True)
+        for i in range(4):
+            path = os.path.join(self.backup_dir, f"{base}_backup_2024010{i + 1}_120000.vault")
+            with open(path, "wb") as f:
+                f.write(b"stara kopia")
+            os.utime(path, (1_700_000_000 + i, 1_700_000_000 + i))
+        provider.upload_backup(self.vault_file, config)  # piąta, nowa kopia
 
         # Z powodu rotacji powinno zostać maksymalnie 3
         vault_files = [f for f in os.listdir(self.backup_dir) if f.endswith(".vault")]

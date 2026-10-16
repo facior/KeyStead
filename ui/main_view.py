@@ -924,10 +924,12 @@ class MainView(ctk.CTkFrame):
         try:
             if self.sync_session:
                 # Tryb serwerowy: szyfrujemy tutaj, zapis lokalnej kopii i wysyłka idą w tle
+                # Każdy zapis podnosi licznik w zaszyfrowanej treści – ochrona przed podsunięciem starej wersji przez serwer
+                self.vault.revision = self.sync_session.next_revision(self.vault.revision)
                 # Migawka sejfu teraz (wątek UI), kosztowne szyfrowanie w kolejce synchronizacji – okno nie zamarza
                 data = self.vault.to_json().encode("utf-8")
                 pwd, kf = self.master_password, self.keyfile_bytes
-                future = self.sync_session.queue_save(lambda: encrypt_payload(data, pwd, kf))
+                future = self.sync_session.queue_save(lambda: encrypt_payload(data, pwd, kf), revision=self.vault.revision)
                 self.count_badge.configure(text=f"({len(self.vault.entries)} wpisów)")
                 if trigger_backup and self.on_auto_backup_trigger:
                     # Kopia zapasowa dopiero po zapisaniu lokalnej kopii

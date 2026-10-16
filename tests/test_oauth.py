@@ -77,17 +77,25 @@ class TestOAuthLogin(OAuthTestBase):
         self.assertNotIn("client_secret", seen["token_request"])
 
     def test_wrong_state_is_rejected(self):
+        """Odpowiedź z obcym `state` jest ignorowana (400) – nie da się nią ani zalogować, ani przerwać logowania."""
         oauth.save_client_config("dropbox", "app-key")
+        cancel = threading.Event()
+        statuses = []
+
+        def attack(redirect):
+            try:
+                urllib.request.urlopen(f"{redirect}?code=X&state=ATAK").read()
+            except urllib.error.HTTPError as e:
+                statuses.append(e.code)
+            cancel.set()
 
         def fake_browser(url):
             params = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
-            threading.Thread(
-                target=lambda: urllib.request.urlopen(f"{params['redirect_uri']}?code=X&state=ATAK").read(),
-                daemon=True
-            ).start()
+            threading.Thread(target=attack, args=(params["redirect_uri"],), daemon=True).start()
 
-        with self.assertRaises(oauth.OAuthError):
-            oauth.login("dropbox", open_browser=fake_browser)
+        with self.assertRaisesRegex(oauth.OAuthError, "anulowane"):
+            oauth.login("dropbox", cancel_event=cancel, open_browser=fake_browser)
+        self.assertEqual(statuses, [400])
 
     def test_cancel_stops_waiting(self):
         oauth.save_client_config("dropbox", "app-key")

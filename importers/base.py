@@ -4,7 +4,9 @@ Bazowy interfejs i struktury danych dla importerów menedżerów haseł.
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
-from core.vault import VaultEntry, Vault
+from core.vault import VaultEntry, Vault, as_fields, as_tags, as_text
+
+MAX_IMPORT_ITEMS = 50_000  # ochrona przed plikami „bombami” – realne eksporty mają setki/tysiące wpisów
 
 
 class ImportItem:
@@ -21,16 +23,18 @@ class ImportItem:
         custom_fields: Optional[Dict[str, str]] = None,
         favorite: bool = False
     ):
-        self.title = title or "Bez tytułu"
-        self.category = category or "Loginy"
-        self.username = username or ""
-        self.password = password or ""
-        self.url = url or ""
-        self.totp_secret = totp_secret or ""
-        self.notes = notes or ""
-        self.tags = tags or []
-        self.custom_fields = custom_fields or {}
-        self.favorite = favorite
+        # Plik importu to niezaufane dane: każde pole sprowadzane do właściwego typu (lista/słownik w miejscu
+        # tekstu psułaby wyszukiwanie i audyt sejfu), z limitem długości
+        self.title = as_text(title, 500) or "Bez tytułu"
+        self.category = as_text(category, 200) or "Loginy"
+        self.username = as_text(username, 1000)
+        self.password = as_text(password, 10_000)
+        self.url = as_text(url, 4000)
+        self.totp_secret = as_text(totp_secret, 1000)
+        self.notes = as_text(notes)
+        self.tags = as_tags(tags)
+        self.custom_fields = as_fields(custom_fields)
+        self.favorite = bool(favorite) if isinstance(favorite, (bool, int)) else False
 
     def to_vault_entry(self) -> VaultEntry:
         return VaultEntry(
@@ -56,6 +60,11 @@ class ImportResult:
         self.categories_found: List[str] = []
 
     def add_item(self, item: ImportItem) -> None:
+        if len(self.items) >= MAX_IMPORT_ITEMS:
+            if not any("limit" in e for e in self.errors):
+                self.add_error(f"Plik zawiera więcej niż {MAX_IMPORT_ITEMS} wpisów – zaimportowano tylko pierwsze "
+                               f"{MAX_IMPORT_ITEMS} (limit chroniący przed uszkodzonymi lub złośliwymi plikami).")
+            return
         self.items.append(item)
         if item.category and item.category not in self.categories_found:
             self.categories_found.append(item.category)

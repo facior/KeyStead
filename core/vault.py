@@ -77,6 +77,32 @@ def _merge_settings(defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[st
     return merged
 
 
+MAX_FIELD_CHARS = 100_000  # notatki itp. – rozsądny limit chroniący przed „bombami” w importowanych plikach
+
+
+def as_text(value: Any, limit: int = MAX_FIELD_CHARS) -> str:
+    """Pole tekstowe z niezaufanego źródła (import, starszy/obcy plik): tylko tekst, z limitem długości."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (str, int, float)):
+        return str(value)[:limit]
+    return ""
+
+
+def as_tags(value: Any) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [t for t in (as_text(v, 100).strip() for v in value[:200]) if t]
+
+
+def as_fields(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {as_text(k, 200): as_text(v) for k, v in list(value.items())[:200] if as_text(k, 200)}
+
+
 class VaultEntry:
     def __init__(
         self,
@@ -96,20 +122,21 @@ class VaultEntry:
         password_history: Optional[List[Dict[str, str]]] = None
     ):
         now_iso = datetime.now(timezone.utc).isoformat()
-        self.id = entry_id or str(uuid.uuid4())
-        self.title = title or "Bez tytułu"
-        self.category = category or "Loginy"
-        self.username = username
-        self.password = password
-        self.url = url
-        self.totp_secret = totp_secret
-        self.notes = notes
-        self.tags = tags or []
-        self.custom_fields = custom_fields or {}
-        self.favorite = bool(favorite)
-        self.created_at = created_at or now_iso
-        self.updated_at = updated_at or now_iso
-        self.password_history = password_history or []
+        self.id = as_text(entry_id, 64) or str(uuid.uuid4())
+        self.title = as_text(title, 500) or "Bez tytułu"
+        self.category = as_text(category, 200) or "Loginy"
+        self.username = as_text(username, 1000)
+        self.password = as_text(password, 10_000)
+        self.url = as_text(url, 4000)
+        self.totp_secret = as_text(totp_secret, 1000)
+        self.notes = as_text(notes)
+        self.tags = as_tags(tags)
+        self.custom_fields = as_fields(custom_fields)
+        self.favorite = bool(favorite) if isinstance(favorite, (bool, int)) else False
+        self.created_at = as_text(created_at, 64) or now_iso
+        self.updated_at = as_text(updated_at, 64) or now_iso
+        self.password_history = [h for h in (password_history or []) if isinstance(h, dict)] \
+            if isinstance(password_history, list) else []
 
     def update(
         self,
@@ -202,6 +229,9 @@ class Vault:
         settings: Optional[Dict[str, Any]] = None
     ):
         self.version = 1
+        # Licznik zapisów wewnątrz zaszyfrowanej treści: serwer synchronizacji nie może go zmienić bez hasła,
+        # więc aplikacja rozpozna podsuniętą starą wersję sejfu (np. z hasłem sprzed zmiany)
+        self.revision = 0
         self.name = name
         self.categories = categories or list(DEFAULT_CATEGORIES[1:])  # bez 'Wszystkie'
         self.settings = _merge_settings(default_settings(), settings or {})
@@ -290,6 +320,7 @@ class Vault:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "version": self.version,
+            "revision": self.revision,
             "name": self.name,
             "categories": self.categories,
             "settings": self.settings,
@@ -308,6 +339,10 @@ class Vault:
             settings=data.get("settings")
         )
         vault.version = data.get("version", 1)
+        try:
+            vault.revision = max(0, int(data.get("revision", 0) or 0))
+        except (TypeError, ValueError):
+            vault.revision = 0
 
         for entry_dict in data.get("entries", []):
             entry = VaultEntry.from_dict(entry_dict)
