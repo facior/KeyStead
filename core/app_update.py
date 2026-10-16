@@ -77,7 +77,10 @@ def can_self_install() -> bool:
 def check_for_update(current: str = APP_VERSION, repository: str = REPOSITORY, timeout: float = 15,
                      http=requests) -> Optional[AppRelease]:
     """Najnowsze wydanie aplikacji, jeśli jest nowsze od `current` – w przeciwnym razie None."""
-    resp = http.get(f"https://api.github.com/repos/{repository}/releases", params={"per_page": 30}, timeout=timeout,
+    # KEYSTEAD_UPDATE_API: inne źródło listy wydań (testy, firmowy serwer lustrzany). Bezpieczne, bo podpis
+    # wydawcy jest wymagany niezależnie od źródła.
+    api = os.environ.get("KEYSTEAD_UPDATE_API") or f"https://api.github.com/repos/{repository}/releases"
+    resp = http.get(api, params={"per_page": 30}, timeout=timeout,
                     headers={"Accept": "application/vnd.github+json", "User-Agent": "KeyStead-Manager"})
     if resp.status_code != 200:
         raise UpdateError(f"GitHub odpowiedział kodem {resp.status_code}.")
