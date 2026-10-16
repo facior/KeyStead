@@ -89,5 +89,36 @@ class TestFieldTypes(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
 
 
+class TestTidyLogins(unittest.TestCase):
+    def test_site_prefix_removed_only_when_matching_url(self):
+        from importers.base import tidy_login
+        self.assertEqual(tidy_login("--", "fotka.com, LukaszKubieniec", "https://fotka.com/"),
+                         ("fotka.com", "LukaszKubieniec"))
+        self.assertEqual(tidy_login("GitHub", "github.com, jan@x.pl", "https://www.github.com/login")[1], "jan@x.pl")
+        self.assertEqual(tidy_login("Konto", "accounts.google.com, jan", "https://google.com")[1], "jan")
+        # nie ruszamy loginów, które tylko wyglądają podobnie
+        self.assertEqual(tidy_login("X", "inna.pl, jan", "https://fotka.com")[1], "inna.pl, jan")
+        self.assertEqual(tidy_login("X", "Kowalski, Jan", "https://fotka.com")[1], "Kowalski, Jan")
+        self.assertEqual(tidy_login("X", "fotka.com, jan", "")[1], "fotka.com, jan")
+        self.assertEqual(tidy_login("--", "jan", ""), ("--", "jan"))
+        self.assertEqual(tidy_login("Moja poczta", "jan", "https://poczta.pl"), ("Moja poczta", "jan"))
+
+    def test_import_and_existing_vault_cleanup(self):
+        from importers.base import tidy_vault, untidy_entries
+        result = ImportResult("test")
+        result.add_item(ImportItem(title="--", username="fotka.com, jan", url="https://fotka.com/"))
+        self.assertEqual((result.items[0].title, result.items[0].username), ("fotka.com", "jan"))
+        v = Vault("x")
+        bad = VaultEntry(title="--", username="fotka.com, jan", password="p", url="https://fotka.com/")
+        ok = VaultEntry(title="Bank", username="jan", password="p", url="https://bank.pl")
+        v.add_entry(bad)
+        v.add_entry(ok)
+        self.assertEqual(len(untidy_entries(v)), 1)
+        self.assertEqual(tidy_vault(v), 1)
+        self.assertEqual((bad.title, bad.username, bad.password), ("fotka.com", "jan", "p"))
+        self.assertEqual(bad.password_history, [])
+        self.assertEqual(untidy_entries(v), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ from importers import (
     is_plaintext_export, secure_delete_file,
     STRATEGY_SKIP, STRATEGY_ADD_ALL, STRATEGY_UPDATE
 )
+from importers.base import tidy_vault, untidy_entries
 from ui.theme import (
     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_CODE, FONT_SMALL,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT, COLOR_CARD_DARK, COLOR_CARD_HOVER,
@@ -1048,6 +1049,18 @@ class ImportDrawerView(ctk.CTkFrame):
         self.import_btn = ctk.CTkButton(scroll, text="📥 Zaimportuj znalezione wpisy", fg_color=COLOR_SUCCESS, state="disabled", command=self._execute_import)
         self.import_btn.pack(fill="x", pady=(5, 10))
 
+        # Porządkowanie wpisów już zapisanych w sejfie (np. po wcześniejszym imporcie)
+        changes = untidy_entries(self.vault)
+        if changes:
+            card = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=8)
+            card.pack(fill="x", pady=(6, 10), ipady=6)
+            ctk.CTkLabel(card, text="🧹 Porządkowanie wpisów", font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(8, 2))
+            ctk.CTkLabel(card, text=(f"{len(changes)} wpisów ma w loginie nazwę strony (np. „fotka.com, jan”) albo tytuł „--”. "
+                                     "Login zostanie skrócony do samej nazwy użytkownika, a tytuł zastąpiony adresem strony."),
+                         font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=420, justify="left").pack(anchor="w", padx=12)
+            ctk.CTkButton(card, text=f"Popraw {len(changes)} wpisów", fg_color=COLOR_PRIMARY,
+                          command=self._tidy_existing).pack(anchor="w", padx=12, pady=(8, 4))
+
     def _browse(self):
         p = filedialog.askopenfilename(
             title="Wybierz plik haseł",
@@ -1102,6 +1115,19 @@ class ImportDrawerView(ctk.CTkFrame):
                 self.preview_lbl.configure(text=f"Błąd:\n{err}", text_color=COLOR_DANGER, justify="left", wraplength=420)
 
         run_in_background(self, lambda: run_import(f, importer_name=name, password=pwd, keyfile_path=keyfile), _ui)
+
+    def _tidy_existing(self):
+        changes = untidy_entries(self.vault)
+        if not changes:
+            return
+        sample = "\n".join(f"• {e.title} / {e.username}  →  {t} / {u}" for e, t, u in changes[:6])
+        more = f"\n… i {len(changes) - 6} innych" if len(changes) > 6 else ""
+        if not messagebox.askyesno("Porządkowanie wpisów", f"Poprawić {len(changes)} wpisów?\n\n{sample}{more}"):
+            return
+        count = tidy_vault(self.vault)
+        messagebox.showinfo("Porządkowanie wpisów", f"Poprawiono wpisów: {count}")
+        if self.on_done:
+            self.on_done(count)
 
     def _execute_import(self):
         if not self._analysis_result or not self._analysis_result.items:

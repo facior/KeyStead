@@ -2,11 +2,57 @@
 Bazowy interfejs i struktury danych dla importerów menedżerów haseł.
 """
 
+import re
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
+from urllib.parse import urlparse
 from core.vault import VaultEntry, Vault, as_fields, as_tags, as_text
 
 MAX_IMPORT_ITEMS = 50_000  # ochrona przed plikami „bombami” – realne eksporty mają setki/tysiące wpisów
+PLACEHOLDER_TITLES = {"", "-", "--", "---", "bez tytułu", "bez nazwy", "untitled", "no name"}
+_SITE_PREFIX = re.compile(r"^([^\s,]+\.[^\s,]+),\s*(\S.*)$")
+
+
+def _host(url: str) -> str:
+    try:
+        host = (urlparse(url if "://" in url else "https://" + url).hostname or "").lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def tidy_login(title: str, username: str, url: str):
+    """
+    Porządkuje typowe śmieci z eksportów: login „strona.pl, jan” (część menedżerów i przeglądarek dokleja
+    domenę do loginu) oraz tytuł „--” / pusty. Domena z loginu jest usuwana tylko, gdy zgadza się z adresem wpisu.
+    """
+    host = _host(url)
+    match = _SITE_PREFIX.match(username or "")
+    if match and host:
+        prefix = _host(match.group(1))
+        if prefix and (prefix == host or host.endswith("." + prefix) or prefix.endswith("." + host)):
+            username = match.group(2).strip()
+    if (title or "").strip().lower() in PLACEHOLDER_TITLES and host:
+        title = host
+    return title, username
+
+
+def untidy_entries(vault: Vault) -> List[tuple]:
+    """Wpisy sejfu (także w koszu), które tidy_login by poprawił: [(wpis, nowy_tytuł, nowy_login)]."""
+    changes = []
+    for entry in list(vault.entries.values()) + list(vault.trash.values()):
+        title, username = tidy_login(entry.title, entry.username, entry.url)
+        if (title, username) != (entry.title, entry.username):
+            changes.append((entry, title, username))
+    return changes
+
+
+def tidy_vault(vault: Vault) -> int:
+    """Poprawia loginy „strona.pl, jan” i tytuły „--” w istniejących wpisach. Zwraca liczbę zmienionych wpisów."""
+    changes = untidy_entries(vault)
+    for entry, title, username in changes:
+        entry.update(title=title, username=username)
+    return len(changes)
 
 
 class ImportItem:
@@ -65,6 +111,7 @@ class ImportResult:
                 self.add_error(f"Plik zawiera więcej niż {MAX_IMPORT_ITEMS} wpisów – zaimportowano tylko pierwsze "
                                f"{MAX_IMPORT_ITEMS} (limit chroniący przed uszkodzonymi lub złośliwymi plikami).")
             return
+        item.title, item.username = tidy_login(item.title, item.username, item.url)
         self.items.append(item)
         if item.category and item.category not in self.categories_found:
             self.categories_found.append(item.category)
