@@ -18,6 +18,7 @@ import math
 import sys
 import time
 import weakref
+from typing import Optional
 
 import customtkinter as ctk
 
@@ -220,3 +221,79 @@ def high_resolution_timer() -> None:
             atexit.register(lambda: ctypes.windll.winmm.timeEndPeriod(1))
     except Exception:
         pass
+
+
+# --------------------------------------------------------------------- pełny ekran bez „rozsypywania się” okna
+class ResizeFreeze:
+    """
+    Maksymalizacja / przywrócenie okna: Windows od razu pokazuje okno w nowym rozmiarze, a Tk i CustomTkinter
+    dorysowują je etapami (tło, potem każda zaokrąglona ramka osobno) – widać rozciągnięte, niedorysowane kawałki.
+    Przy dużej zmianie rozmiaru naraz wstrzymujemy rysowanie okna (WM_SETREDRAW), Tk układa wszystko,
+    a potem całe okno rysuje się jednym ruchem. Zwykłe przeciąganie krawędzi (małe kroki) działa bez zmian.
+    """
+
+    JUMP_PX = 120          # tyle naraz = maksymalizacja / przywrócenie / przyciągnięcie do krawędzi
+    SETTLE_MS = 60         # ile spokoju po ostatniej zmianie przed odsłonięciem
+    MAX_FREEZE_MS = 500    # bezpiecznik: rysowanie wraca zawsze
+
+    def __init__(self, root):
+        self.root = root
+        self._size = (root.winfo_width(), root.winfo_height())
+        self._frozen_at = None
+        self._settle_job = None
+        root.bind("<Configure>", self._on_configure, add="+")
+
+    def _hwnd(self) -> int:
+        return self.root.winfo_id()
+
+    def _on_configure(self, event) -> None:
+        if event.widget is not self.root:
+            return
+        size = (event.width, event.height)
+        old, self._size = self._size, size
+        if self._frozen_at is None:
+            if abs(size[0] - old[0]) < self.JUMP_PX and abs(size[1] - old[1]) < self.JUMP_PX:
+                return
+            self._freeze()
+        if self._settle_job is not None:
+            self.root.after_cancel(self._settle_job)
+        waited = (time.perf_counter() - self._frozen_at) * 1000
+        delay = self.SETTLE_MS if waited + self.SETTLE_MS < self.MAX_FREEZE_MS else 0
+        self._settle_job = self.root.after(delay, self._thaw)
+
+    def _freeze(self) -> None:
+        try:
+            import ctypes
+            ctypes.windll.user32.SendMessageW(self._hwnd(), 0x000B, 0, 0)  # WM_SETREDRAW = FALSE
+            self._frozen_at = time.perf_counter()
+            self.root.after(self.MAX_FREEZE_MS, self._thaw)
+        except Exception:
+            self._frozen_at = None
+
+    def _thaw(self) -> None:
+        if self._frozen_at is None:
+            return
+        self._settle_job = None
+        try:
+            self.root.update_idletasks()  # dokończ układ przed pokazaniem
+        except Exception:
+            pass
+        self._frozen_at = None
+        try:
+            import ctypes
+            hwnd = self._hwnd()
+            ctypes.windll.user32.SendMessageW(hwnd, 0x000B, 1, 0)  # WM_SETREDRAW = TRUE
+            # RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME
+            ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x1 | 0x4 | 0x80 | 0x100 | 0x400)
+        except Exception:
+            pass
+
+    @property
+    def frozen(self) -> bool:
+        return self._frozen_at is not None
+
+
+def install_resize_freeze(root) -> Optional["ResizeFreeze"]:
+    if not sys.platform.startswith("win"):
+        return None
+    return ResizeFreeze(root)

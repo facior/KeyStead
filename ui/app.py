@@ -40,6 +40,7 @@ from ui.main_view import MainView
 from ui.onboarding_wizard import OnboardingWizard, is_first_run
 from ui.recovery_ui import FORCE_CHANGE_KEY, AdminRecoveryTools, PasswordPrompt, RecoveryCodeDialog
 from ui.site_icons_ui import IconProvider
+from ui import perf
 
 
 SYNC_POLL_SECONDS = 30
@@ -149,6 +150,7 @@ class PasswordManagerApp(ctk.CTk):
         self.after(40, self._drain_ui_queue)
         self.icon_provider = IconProvider(self)  # ikony stron przy wpisach (pobierane bezpośrednio ze stron)
         cleanup_temp_copies()  # pozostałości po nieoczekiwanym zamknięciu (np. awaria zasilania)
+        self._resize_freeze = perf.install_resize_freeze(self)  # pełny ekran bez rysowania okna „po kawałku”
 
         # Śledzenie aktywności użytkownika w celu automatycznej blokady
         self.bind_all("<KeyPress>", self._on_user_activity, add="+")
@@ -725,9 +727,8 @@ class PasswordManagerApp(ctk.CTk):
     def open_admin_tools(self):
         view = self._current_view
         if isinstance(view, MainView):
-            container = view.drawer.open("Narzędzia administratora firmy",
-                                         "Klucz odzyskiwania firmy i odzyskiwanie dostępu pracownikom")
-            AdminRecoveryTools(container)
+            view.drawer.open("Narzędzia administratora firmy",
+                             "Klucz odzyskiwania firmy i odzyskiwanie dostępu pracownikom", build=AdminRecoveryTools)
 
     def _sync_org_recovery(self, view, policy: dict):
         """Klucz odzyskiwania firmy z polityki serwera → klucz dostępu w sejfie (odcisk zapamiętany w sejfie)."""

@@ -15,6 +15,7 @@ import os
 import threading
 from datetime import datetime
 from typing import Optional, Callable, Dict, Any, List
+import tkinter as tk
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
@@ -59,6 +60,22 @@ def run_in_background(widget, work: Callable[[], Any], on_done: Callable[[Any], 
 # =====================================================================
 # 1. FORMULARZ WPISU (ENTRY DRAWER VIEW)
 # =====================================================================
+
+def layout_frame(parent) -> tk.Frame:
+    """
+    Ramka wyłącznie do układania elementów: zwykła ramka Tk w kolorze rodzica.
+    Przezroczysta CTkFrame ma własne płótno i rysuje się przy każdej zmianie rozmiaru – kilka razy wolniej,
+    a panel boczny miał ich kilkadziesiąt.
+    """
+    try:
+        bg = parent.cget("bg")  # zwykłe widżety Tk i wnętrze CTkScrollableFrame
+    except (ValueError, tk.TclError):
+        color = parent.cget("fg_color")
+        if color == "transparent":
+            color = parent.cget("bg_color")
+        bg = parent._apply_appearance_mode(color)
+    return tk.Frame(parent, bg=bg, bd=0, highlightthickness=0)
+
 class EntryDrawerView(ctk.CTkFrame):
     def __init__(
         self,
@@ -94,10 +111,10 @@ class EntryDrawerView(ctk.CTkFrame):
         self.title_entry.pack(fill="x", pady=(0, 10))
 
         # Kategoria i Ulubione
-        cat_fav = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        cat_fav = layout_frame(self.scroll)
         cat_fav.pack(fill="x", pady=(0, 10))
 
-        c_col = ctk.CTkFrame(cat_fav, fg_color="transparent")
+        c_col = layout_frame(cat_fav)
         c_col.pack(side="left", expand=True, fill="x", padx=(0, 10))
         ctk.CTkLabel(c_col, text="Kategoria:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 2))
         available_cats = [c for c in self.categories if c != "Wszystkie"]
@@ -105,7 +122,7 @@ class EntryDrawerView(ctk.CTkFrame):
         self.cat_combo.set(available_cats[0] if available_cats else "Loginy")
         self.cat_combo.pack(fill="x")
 
-        f_col = ctk.CTkFrame(cat_fav, fg_color="transparent")
+        f_col = layout_frame(cat_fav)
         f_col.pack(side="right", padx=(10, 0), pady=(18, 0))
         self.fav_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(f_col, text="⭐ Ulubione", variable=self.fav_var).pack()
@@ -117,7 +134,7 @@ class EntryDrawerView(ctk.CTkFrame):
 
         # Hasło
         ctk.CTkLabel(self.scroll, text="Hasło", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        pwd_box = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        pwd_box = layout_frame(self.scroll)
         pwd_box.pack(fill="x", pady=(0, 2))
 
         self.pwd_entry = ctk.CTkEntry(pwd_box, show="•", placeholder_text="Wpisz hasło lub wygeneruj...")
@@ -135,7 +152,7 @@ class EntryDrawerView(ctk.CTkFrame):
         self.strength_bar.set(0)
 
         # Wiersz wskaźnika siły i weryfikacji HIBP
-        s_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        s_row = layout_frame(self.scroll)
         s_row.pack(fill="x", pady=(0, 10))
 
         self.strength_lbl = ctk.CTkLabel(s_row, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
@@ -173,7 +190,7 @@ class EntryDrawerView(ctk.CTkFrame):
         self.tags_entry.pack(fill="x", pady=(0, 12))
 
         # Pola dodatkowe
-        c_head = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        c_head = layout_frame(self.scroll)
         c_head.pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(c_head, text="Pola niestandardowe (PIN, Pytania, Klucze)", font=FONT_BODY_BOLD).pack(side="left")
         ctk.CTkButton(c_head, text="+ Dodaj pole", width=90, height=24, fg_color=COLOR_CARD_DARK, command=self._add_field_row).pack(side="right")
@@ -243,7 +260,7 @@ class EntryDrawerView(ctk.CTkFrame):
         run_in_background(self, lambda: check_password_breach_hibp(pwd), _ui)
 
     def _add_field_row(self, k: str = "", v: str = ""):
-        row = ctk.CTkFrame(self.custom_fields_box, fg_color="transparent")
+        row = layout_frame(self.custom_fields_box)
         row.pack(fill="x", padx=8, pady=4)
 
         ke = ctk.CTkEntry(row, placeholder_text="Pole (np. PIN)")
@@ -361,7 +378,7 @@ class GeneratorDrawerView(ctk.CTkFrame):
         self.s_lbl.pack(pady=(0, 6))
 
         # Przyciski Kopiuj / Nowe / Użyj
-        btn_box = ctk.CTkFrame(scroll, fg_color="transparent")
+        btn_box = layout_frame(scroll)
         btn_box.pack(fill="x", pady=(0, 15))
 
         self.copy_btn = ctk.CTkButton(btn_box, text="Kopiuj do schowka", fg_color=COLOR_PRIMARY, command=self._copy)
@@ -382,7 +399,7 @@ class GeneratorDrawerView(ctk.CTkFrame):
         self.opts_box.pack(fill="x", ipady=8, padx=2)
 
         # Długość
-        lh = ctk.CTkFrame(self.opts_box, fg_color="transparent")
+        lh = layout_frame(self.opts_box)
         lh.pack(fill="x", padx=15, pady=(8, 2))
         ctk.CTkLabel(lh, text="Długość hasła:", font=FONT_BODY_BOLD).pack(side="left")
         self.len_lbl = ctk.CTkLabel(lh, text="20", font=FONT_BODY_BOLD, text_color=COLOR_PRIMARY_LIGHT)
@@ -466,13 +483,13 @@ class AuditDrawerView(ctk.CTkFrame):
         self.score_card = ctk.CTkFrame(self.scroll, fg_color=COLOR_CARD_DARK, corner_radius=12)
         self.score_card.pack(fill="x", pady=(0, 15), ipady=6)
 
-        inner = ctk.CTkFrame(self.score_card, fg_color="transparent")
+        inner = layout_frame(self.score_card)
         inner.pack(fill="x", padx=15, pady=8)
 
         self.score_lbl = ctk.CTkLabel(inner, text="--", font=("Segoe UI", 32, "bold"), text_color=COLOR_SUCCESS)
         self.score_lbl.pack(side="left", padx=(0, 12))
 
-        col = ctk.CTkFrame(inner, fg_color="transparent")
+        col = layout_frame(inner)
         col.pack(side="left", fill="x", expand=True)
 
         self.score_title = ctk.CTkLabel(col, text="Trwa skanowanie sejfu...", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w")
@@ -493,7 +510,7 @@ class AuditDrawerView(ctk.CTkFrame):
 
         # Kontener na listę uwag
         ctk.CTkLabel(self.scroll, text="Wykryte uwagi bezpieczeństwa:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 6))
-        self.issues_container = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.issues_container = layout_frame(self.scroll)
         self.issues_container.pack(fill="both", expand=True)
 
     def _toggle_monitoring(self):
@@ -547,10 +564,10 @@ class AuditDrawerView(ctk.CTkFrame):
             card = ctk.CTkFrame(self.issues_container, fg_color=COLOR_CARD_DARK, corner_radius=8)
             card.pack(fill="x", pady=4)
 
-            row = ctk.CTkFrame(card, fg_color="transparent")
+            row = layout_frame(card)
             row.pack(fill="x", padx=12, pady=10)
 
-            col = ctk.CTkFrame(row, fg_color="transparent")
+            col = layout_frame(row)
             col.pack(side="left", fill="x", expand=True)
 
             sev_color = COLOR_DANGER if issue.severity == "critical" else (COLOR_WARNING if issue.severity == "high" else COLOR_PRIMARY_LIGHT)
@@ -613,12 +630,12 @@ class BackupDrawerView(ctk.CTkFrame):
         c1 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
         c1.pack(fill="x", pady=6, ipady=6)
         ctk.CTkLabel(c1, text="💾 Kopia lokalna / Nośnik USB", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 2))
-        r1 = ctk.CTkFrame(c1, fg_color="transparent")
+        r1 = layout_frame(c1)
         r1.pack(fill="x", padx=15, pady=4)
         self.local_dir_e = ctk.CTkEntry(r1, placeholder_text="Ścieżka do katalogu na kopie...")
         self.local_dir_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
         ctk.CTkButton(r1, text="Wybierz...", width=80, fg_color=COLOR_PANEL_DARK, command=lambda: self._browse_into(self.local_dir_e, "Katalog kopii lokalnej")).pack(side="left")
-        b1 = ctk.CTkFrame(c1, fg_color="transparent")
+        b1 = layout_frame(c1)
         b1.pack(fill="x", padx=15, pady=(4, 8))
         self._action_button(b1, text="Utwórz kopię teraz", fg_color=COLOR_PRIMARY, command=lambda: self._run_backup("local")).pack(side="left")
 
@@ -632,13 +649,13 @@ class BackupDrawerView(ctk.CTkFrame):
         ctk.CTkLabel(c2, text="🌐 WebDAV (Nextcloud / ownCloud / Synology)", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 2))
         self.webdav_url_e = ctk.CTkEntry(c2, placeholder_text="https://cloud.example.com/remote.php/dav/files/user/")
         self.webdav_url_e.pack(fill="x", padx=15, pady=4)
-        w_auth = ctk.CTkFrame(c2, fg_color="transparent")
+        w_auth = layout_frame(c2)
         w_auth.pack(fill="x", padx=15, pady=4)
         self.webdav_user_e = ctk.CTkEntry(w_auth, placeholder_text="Login / Użytkownik")
         self.webdav_user_e.pack(side="left", expand=True, fill="x", padx=(0, 4))
         self.webdav_pwd_e = ctk.CTkEntry(w_auth, show="•", placeholder_text="Hasło / Token aplikacji")
         self.webdav_pwd_e.pack(side="left", expand=True, fill="x", padx=(4, 0))
-        b2 = ctk.CTkFrame(c2, fg_color="transparent")
+        b2 = layout_frame(c2)
         b2.pack(fill="x", padx=15, pady=(4, 8))
         self._action_button(b2, text="Testuj", width=75, fg_color=COLOR_PANEL_DARK, command=lambda: self._test("webdav")).pack(side="left", padx=(0, 6))
         self._action_button(b2, text="Wyślij kopię na WebDAV", fg_color=COLOR_PRIMARY, command=lambda: self._run_backup("webdav")).pack(side="left")
@@ -656,13 +673,13 @@ class BackupDrawerView(ctk.CTkFrame):
         card = ctk.CTkFrame(parent, fg_color=COLOR_CARD_DARK, corner_radius=10)
         card.pack(fill="x", pady=6, ipady=6)
 
-        head = ctk.CTkFrame(card, fg_color="transparent")
+        head = layout_frame(card)
         head.pack(fill="x", padx=15, pady=(8, 2))
         ctk.CTkLabel(head, text=title, font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(side="left")
         status = ctk.CTkLabel(head, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
         status.pack(side="right")
 
-        row = ctk.CTkFrame(card, fg_color="transparent")
+        row = layout_frame(card)
         row.pack(fill="x", padx=15, pady=4)
         login_btn = ctk.CTkButton(row, text=login_text, fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, command=lambda: self._login_or_logout(key))
         login_btn.pack(side="left", padx=(0, 6))
@@ -670,7 +687,7 @@ class BackupDrawerView(ctk.CTkFrame):
         self._action_button(row, text="Wyślij kopię", width=100, fg_color=COLOR_PANEL_DARK, command=lambda: self._run_backup(key)).pack(side="left")
 
         ctk.CTkLabel(card, text="…lub zamiast logowania: folder synchronizacji na tym komputerze", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=15, pady=(4, 0))
-        f_row = ctk.CTkFrame(card, fg_color="transparent")
+        f_row = layout_frame(card)
         f_row.pack(fill="x", padx=15, pady=(2, 8))
         folder_e = ctk.CTkEntry(f_row, placeholder_text=folder_hint)
         folder_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
@@ -681,7 +698,7 @@ class BackupDrawerView(ctk.CTkFrame):
     def _build_oauth_config_card(self, parent):
         card = ctk.CTkFrame(parent, fg_color=COLOR_CARD_DARK, corner_radius=10)
         card.pack(fill="x", pady=6, ipady=6)
-        head = ctk.CTkFrame(card, fg_color="transparent")
+        head = layout_frame(card)
         head.pack(fill="x", padx=15, pady=(8, 2))
         ctk.CTkLabel(head, text="⚙️ Konfiguracja logowania do chmury", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(side="left")
         self._oauth_toggle_btn = ctk.CTkButton(head, text="Pokaż", width=70, height=26, fg_color=COLOR_PANEL_DARK, command=self._toggle_oauth_config)
@@ -692,8 +709,13 @@ class BackupDrawerView(ctk.CTkFrame):
             font=FONT_SMALL, text_color=COLOR_TEXT_MUTED
         ).pack(anchor="w", padx=15)
 
-        self._oauth_body = ctk.CTkFrame(card, fg_color="transparent")
+        self._oauth_card = card
+        self._oauth_body = None
         self._oauth_entries: Dict[str, Dict[str, ctk.CTkEntry]] = {}
+
+    def _build_oauth_body(self):
+        """Pola Client ID – budowane dopiero przy pierwszym rozwinięciu karty (rzadko używane, a kosztowne)."""
+        self._oauth_body = layout_frame(self._oauth_card)
         fields = [
             ("onedrive", "Microsoft – Identyfikator aplikacji (klienta)", False),
             ("google_drive", "Google – Client ID", True),
@@ -715,12 +737,14 @@ class BackupDrawerView(ctk.CTkFrame):
                 entries["secret"] = sec_e
             self._oauth_entries[key] = entries
 
-        btns = ctk.CTkFrame(self._oauth_body, fg_color="transparent")
+        btns = layout_frame(self._oauth_body)
         btns.pack(fill="x", pady=(10, 4))
         ctk.CTkButton(btns, text="Zapisz identyfikatory", fg_color=COLOR_SUCCESS, command=self._save_oauth_clients).pack(side="left")
         ctk.CTkButton(btns, text="❓ Jak uzyskać Client ID", fg_color=COLOR_PANEL_DARK, command=self._show_oauth_help).pack(side="left", padx=6)
 
     def _toggle_oauth_config(self, force_open: bool = False):
+        if self._oauth_body is None:
+            self._build_oauth_body()
         if self._oauth_body.winfo_ismapped() and not force_open:
             self._oauth_body.pack_forget()
             self._oauth_toggle_btn.configure(text="Pokaż")
@@ -1007,7 +1031,7 @@ class ImportDrawerView(ctk.CTkFrame):
         self.imp_combo.pack(fill="x", pady=(0, 12))
 
         ctk.CTkLabel(scroll, text="Plik z danymi haseł:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(0, 4))
-        fb = ctk.CTkFrame(scroll, fg_color="transparent")
+        fb = layout_frame(scroll)
         fb.pack(fill="x", pady=(0, 10))
         self.file_e = ctk.CTkEntry(fb, placeholder_text="Wskaż plik...")
         self.file_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
@@ -1017,7 +1041,7 @@ class ImportDrawerView(ctk.CTkFrame):
         self.pwd_e = ctk.CTkEntry(scroll, show="•", placeholder_text="Hasło do bazy (tylko KeePass .kdbx)...")
         self.pwd_e.pack(fill="x", pady=(0, 6))
 
-        kb = ctk.CTkFrame(scroll, fg_color="transparent")
+        kb = layout_frame(scroll)
         kb.pack(fill="x", pady=(0, 12))
         self.keyfile_e = ctk.CTkEntry(kb, placeholder_text="Opcjonalny plik klucza KeePass...")
         self.keyfile_e.pack(side="left", expand=True, fill="x", padx=(0, 6))
@@ -1302,7 +1326,7 @@ class SettingsDrawerView(ctk.CTkFrame):
         self._hotkey_entries = {}
         for key, label in (("search", "Szybkie wyszukiwanie (Enter kopiuje hasło)"),
                            ("autotype", "Autotype – wpisz login i hasło w aktywne okno")):
-            row = ctk.CTkFrame(card, fg_color="transparent")
+            row = layout_frame(card)
             row.pack(fill="x", padx=15, pady=2)
             entry = ctk.CTkEntry(row, width=170)
             entry.insert(0, hk.get(key, ""))
@@ -1331,7 +1355,7 @@ class SettingsDrawerView(ctk.CTkFrame):
         ctk.CTkLabel(card, text=("Kod pozwala ustawić nowe hasło główne, gdy je zapomnisz. Pokazywany jest tylko raz – "
                                  "zapisz go poza komputerem. Utworzenie nowego kodu unieważnia poprzedni."),
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=440, justify="left").pack(anchor="w", padx=15)
-        row = ctk.CTkFrame(card, fg_color="transparent")
+        row = layout_frame(card)
         row.pack(fill="x", padx=15, pady=8)
         ctk.CTkButton(row, text="Utwórz nowy kod" if rec.get("has_code") else "Utwórz kod odzyskiwania",
                       fg_color=COLOR_PRIMARY, command=rec["on_create"]).pack(side="left")
@@ -1456,7 +1480,7 @@ class SyncDrawerView(ctk.CTkFrame):
         # Karta stanu
         card = ctk.CTkFrame(self.scroll, fg_color=COLOR_CARD_DARK, corner_radius=12)
         card.pack(fill="x", pady=(0, 12), ipady=6)
-        head = ctk.CTkFrame(card, fg_color="transparent")
+        head = layout_frame(card)
         head.pack(fill="x", padx=15, pady=(10, 2))
         self.state_lbl = ctk.CTkLabel(head, text="", font=FONT_SUBTITLE, anchor="w")
         self.state_lbl.pack(side="left")
@@ -1465,7 +1489,7 @@ class SyncDrawerView(ctk.CTkFrame):
         self.message_lbl = ctk.CTkLabel(card, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w", justify="left", wraplength=480)
         self.message_lbl.pack(anchor="w", padx=15, pady=(0, 6))
 
-        self.details = ctk.CTkFrame(card, fg_color="transparent")
+        self.details = layout_frame(card)
         self.details.pack(fill="x", padx=15, pady=(0, 8))
 
         # Rozwiązywanie konfliktu (pokazywane tylko w razie potrzeby)
@@ -1477,7 +1501,7 @@ class SyncDrawerView(ctk.CTkFrame):
                  "Niezależnie od wyboru, druga wersja zostaje w historii serwera i można ją później przywrócić.",
             font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, justify="left", wraplength=480
         ).pack(anchor="w", padx=15, pady=(0, 8))
-        btns = ctk.CTkFrame(self.conflict_card, fg_color="transparent")
+        btns = layout_frame(self.conflict_card)
         btns.pack(fill="x", padx=15, pady=(0, 12))
         self.use_server_btn = ctk.CTkButton(btns, text="⬇️ Pobierz wersję z serwera", fg_color=COLOR_PANEL_DARK, command=self._use_server)
         self.use_server_btn.pack(side="left", padx=(0, 6))
@@ -1485,11 +1509,11 @@ class SyncDrawerView(ctk.CTkFrame):
         self.keep_local_btn.pack(side="left")
 
         # Historia wersji
-        self.history_head = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.history_head = layout_frame(self.scroll)
         self.history_head.pack(fill="x", pady=(4, 4))
         ctk.CTkLabel(self.history_head, text="Historia wersji na serwerze", font=FONT_BODY_BOLD).pack(side="left")
         ctk.CTkButton(self.history_head, text="Odśwież", width=70, height=24, fg_color=COLOR_PANEL_DARK, command=self._load_history).pack(side="right")
-        self.history_box = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.history_box = layout_frame(self.scroll)
         self.history_box.pack(fill="x")
 
         self._refresh_status()
@@ -1524,7 +1548,7 @@ class SyncDrawerView(ctk.CTkFrame):
             ("Ostatnia synchronizacja", _format_time(st.last_sync)),
         ]
         for key, value in rows:
-            r = ctk.CTkFrame(self.details, fg_color="transparent")
+            r = layout_frame(self.details)
             r.pack(fill="x", pady=1)
             ctk.CTkLabel(r, text=f"{key}:", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, width=170, anchor="w").pack(side="left")
             ctk.CTkLabel(r, text=value, font=FONT_SMALL, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(side="left")

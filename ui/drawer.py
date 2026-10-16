@@ -150,11 +150,14 @@ class SlidingDrawer:
         self,
         title: str,
         subtitle: str = "",
-        on_closed: Optional[Callable[[], None]] = None
+        on_closed: Optional[Callable[[], None]] = None,
+        build: Optional[Callable[[ctk.CTkFrame], object]] = None
     ) -> ctk.CTkFrame:
         """
         Płynnie wysuwa panel z prawej strony i zwraca pusty kontener `content_container`
         do wypełnienia widokiem.
+
+        Z `build`: zawartość budowana od razu (`build(kontener)`), a panel wysuwa się już z gotową treścią.
         """
         self.on_closed = on_closed
         self.title_lbl.configure(text=title)
@@ -174,11 +177,16 @@ class SlidingDrawer:
             # Panel już jest na miejscu – tylko nowa treść
             self.panel.place(relx=target, rely=0, relwidth=self._target_rel_width, relheight=1.0)
             self._current_x_fraction = target
+            if build is not None:
+                build(self.content_container)
             return self.content_container
 
         start = self._current_x_fraction if self._animating else 1.0
         self.is_open = True
         self._animating = True
+        if build is not None:
+            # Zawartość powstaje przed ruchem – panel dojeżdża już pełny (bez chwili pustego panelu)
+            build(self.content_container)
         # Start dopiero po zbudowaniu zawartości przez wywołującego (after_idle)
         self.parent.after_idle(lambda: self._start_open(start, target, token))
         return self.content_container

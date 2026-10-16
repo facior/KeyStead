@@ -1406,59 +1406,67 @@ class MainView(ctk.CTkFrame):
 
     # ----------------- WYSKIWANIE BOCZNYCH PANELI (DRAWER) -----------------
     def _open_new_entry_dialog(self):
-        container = self.drawer.open("Nowy Wpis", "Wprowadź dane nowego konta lub usługi")
-        def _on_save(new_entry):
-            self.vault.add_entry(new_entry)
-            self.vault.add_category(new_entry.category)
-            self._save_vault_to_disk()
-            self.drawer.close()
-            self._build_sidebar()
-            self._select_entry(new_entry.id)
+        def _build(container):
+            def _on_save(new_entry):
+                self.vault.add_entry(new_entry)
+                self.vault.add_category(new_entry.category)
+                self._save_vault_to_disk()
+                self.drawer.close()
+                self._build_sidebar()
+                self._select_entry(new_entry.id)
 
-        EntryDrawerView(
-            container,
-            categories=self.vault.categories,
-            entry=None,
-            on_save=_on_save,
-            on_cancel=self.drawer.close
-        )
+            EntryDrawerView(
+                container,
+                categories=self.vault.categories,
+                entry=None,
+                on_save=_on_save,
+                on_cancel=self.drawer.close
+            )
+
+        self.drawer.open("Nowy Wpis", "Wprowadź dane nowego konta lub usługi", build=_build)
 
     def _open_edit_entry_dialog(self, entry: VaultEntry):
-        container = self.drawer.open(f"Edycja: {entry.title}", "Zaktualizuj hasło lub dane wpisu")
-        def _on_save(saved_entry):
-            self.vault.add_category(saved_entry.category)
-            self._save_vault_to_disk()
-            self.drawer.close()
-            self._build_sidebar()
-            self._select_entry(saved_entry.id)
+        def _build(container):
+            def _on_save(saved_entry):
+                self.vault.add_category(saved_entry.category)
+                self._save_vault_to_disk()
+                self.drawer.close()
+                self._build_sidebar()
+                self._select_entry(saved_entry.id)
 
-        EntryDrawerView(
-            container,
-            categories=self.vault.categories,
-            entry=entry,
-            on_save=_on_save,
-            on_cancel=self.drawer.close
-        )
+            EntryDrawerView(
+                container,
+                categories=self.vault.categories,
+                entry=entry,
+                on_save=_on_save,
+                on_cancel=self.drawer.close
+            )
+
+        self.drawer.open(f"Edycja: {entry.title}", "Zaktualizuj hasło lub dane wpisu", build=_build)
 
     def _open_generator_dialog(self):
-        container = self.drawer.open("Generator Haseł i Passphrase", "Generowanie silnych, losowych haseł oraz fraz Diceware")
-        GeneratorDrawerView(container)
+        def _build(container):
+            GeneratorDrawerView(container)
+
+        self.drawer.open("Generator Haseł i Passphrase", "Generowanie silnych, losowych haseł oraz fraz Diceware", build=_build)
 
     def _open_audit_dialog(self):
-        container = self.drawer.open("Centrum Audytu Bezpieczeństwa", "Monitor wycieków Have I Been Pwned i higiena haseł")
-        def _fix_entry(eid):
-            entry = self.vault.get_entry(eid)
-            if entry:
-                self._open_edit_entry_dialog(entry)
+        def _build(container):
+            def _fix_entry(eid):
+                entry = self.vault.get_entry(eid)
+                if entry:
+                    self._open_edit_entry_dialog(entry)
 
-        def _report(report):
-            # Ręczny audyt odświeża też plakietkę na przycisku
-            self.set_audit_badge(attention_count(report), critical=bool(report.breached_issues))
-            if self.on_audit_report:
-                self.on_audit_report(report)
+            def _report(report):
+                # Ręczny audyt odświeża też plakietkę na przycisku
+                self.set_audit_badge(attention_count(report), critical=bool(report.breached_issues))
+                if self.on_audit_report:
+                    self.on_audit_report(report)
 
-        AuditDrawerView(container, vault=self.vault, on_fix_entry=_fix_entry, on_report=_report,
-                        on_settings_changed=lambda: self._save_vault_to_disk(trigger_backup=False))
+            AuditDrawerView(container, vault=self.vault, on_fix_entry=_fix_entry, on_report=_report,
+                            on_settings_changed=lambda: self._save_vault_to_disk(trigger_backup=False))
+
+        self.drawer.open("Centrum Audytu Bezpieczeństwa", "Monitor wycieków Have I Been Pwned i higiena haseł", build=_build)
 
     def _open_backup_dialog(self):
         if not personal_backups_allowed(self.policy):
@@ -1469,58 +1477,64 @@ class MainView(ctk.CTkFrame):
                 "w razie potrzeby administrator może przywrócić wcześniejszą wersję."
             )
             return
-        container = self.drawer.open("Centrum Kopii Zapasowych i Chmury", "Konfiguracja kopii na WebDAV, Google Drive, OneDrive lub USB")
-        BackupDrawerView(
-            container,
-            vault=self.vault,
-            vault_file_path=self.vault_file_path,
-            on_saved=lambda: self._save_vault_to_disk(trigger_backup=False)
-        )
+        def _build(container):
+            BackupDrawerView(
+                container,
+                vault=self.vault,
+                vault_file_path=self.vault_file_path,
+                on_saved=lambda: self._save_vault_to_disk(trigger_backup=False)
+            )
+
+        self.drawer.open("Centrum Kopii Zapasowych i Chmury", "Konfiguracja kopii na WebDAV, Google Drive, OneDrive lub USB", build=_build)
 
     def open_import_dialog(self):
         self._open_import_dialog()
 
     def _open_import_dialog(self):
-        container = self.drawer.open("Kreator Importu", "Przenieś hasła z Bitwarden, KeePass, 1Password lub Chrome")
-        def _on_done(count):
-            self._save_vault_to_disk()
-            self.drawer.close()
-            self._build_sidebar()
-            self._refresh_entries_list()
-            if self.selected_entry_id:
-                self._render_entry_details(self.selected_entry_id)
-            else:
-                self._show_empty_details()
+        def _build(container):
+            def _on_done(count):
+                self._save_vault_to_disk()
+                self.drawer.close()
+                self._build_sidebar()
+                self._refresh_entries_list()
+                if self.selected_entry_id:
+                    self._render_entry_details(self.selected_entry_id)
+                else:
+                    self._show_empty_details()
 
-        ImportDrawerView(container, vault=self.vault, on_done=_on_done)
+            ImportDrawerView(container, vault=self.vault, on_done=_on_done)
+
+        self.drawer.open("Kreator Importu", "Przenieś hasła z Bitwarden, KeePass, 1Password lub Chrome", build=_build)
 
     def _open_settings_dialog(self):
-        container = self.drawer.open("Ustawienia Sejfu", "Zarządzanie czasem blokady, schowkiem i hasłem głównym")
-        def _pwd_changed(new_pwd):
-            self.master_password = new_pwd
-            if self.sync_session:
-                self.sync_session.update_credentials(new_pwd, self.keyfile_bytes)
-            if self.on_master_password_changed:
-                self.on_master_password_changed(new_pwd)
+        def _build(container):
+            def _pwd_changed(new_pwd):
+                self.master_password = new_pwd
+                if self.sync_session:
+                    self.sync_session.update_credentials(new_pwd, self.keyfile_bytes)
+                if self.on_master_password_changed:
+                    self.on_master_password_changed(new_pwd)
 
-        def _save_with_new_password(new_pwd):
-            # Tryb serwerowy: nowa wersja (zaszyfrowana nowym hasłem) idzie przez kolejkę synchronizacji
-            _pwd_changed(new_pwd)
-            if not self._save_vault_to_disk():
-                raise OSError("Nie udało się zapisać sejfu.")
+            def _save_with_new_password(new_pwd):
+                # Tryb serwerowy: nowa wersja (zaszyfrowana nowym hasłem) idzie przez kolejkę synchronizacji
+                _pwd_changed(new_pwd)
+                if not self._save_vault_to_disk():
+                    raise OSError("Nie udało się zapisać sejfu.")
 
-        SettingsDrawerView(
-            container,
-            vault=self.vault,
-            current_password=self.master_password,
-            vault_file_path=self.vault_file_path,
-            keyfile_bytes=self.keyfile_bytes,
-            on_pwd_changed=_pwd_changed,
-            on_saved=self._save_vault_to_disk,
-            password_saver=_save_with_new_password if self.sync_session else None,
-            policy=self.policy,
-            security_options=getattr(self.winfo_toplevel(), "security_options", lambda: None)()
-        )
+            SettingsDrawerView(
+                container,
+                vault=self.vault,
+                current_password=self.master_password,
+                vault_file_path=self.vault_file_path,
+                keyfile_bytes=self.keyfile_bytes,
+                on_pwd_changed=_pwd_changed,
+                on_saved=self._save_vault_to_disk,
+                password_saver=_save_with_new_password if self.sync_session else None,
+                policy=self.policy,
+                security_options=getattr(self.winfo_toplevel(), "security_options", lambda: None)()
+            )
+
+        self.drawer.open("Ustawienia Sejfu", "Zarządzanie czasem blokady, schowkiem i hasłem głównym", build=_build)
 
     # ----------------- SYNCHRONIZACJA Z SERWEREM -----------------
     # stan → (ikona, tekst, tło, kolor tekstu)
@@ -1612,13 +1626,15 @@ class MainView(ctk.CTkFrame):
     def _open_sync_dialog(self):
         if not self.sync_session:
             return
-        container = self.drawer.open("Synchronizacja z serwerem", "Stan sejfu na serwerze, konflikty i historia wersji")
-        SyncDrawerView(
-            container,
-            session=self.sync_session,
-            on_vault_replaced=lambda v, msg: self._replace_vault_from_sync(v, msg),
-            on_sync_now=self.on_sync_requested
-        )
+        def _build(container):
+            SyncDrawerView(
+                container,
+                session=self.sync_session,
+                on_vault_replaced=lambda v, msg: self._replace_vault_from_sync(v, msg),
+                on_sync_now=self.on_sync_requested
+            )
+
+        self.drawer.open("Synchronizacja z serwerem", "Stan sejfu na serwerze, konflikty i historia wersji", build=_build)
 
     def _replace_vault_from_sync(self, vault: Vault, message: str):
         """Wynik rozwiązania konfliktu / przywrócenia wersji – zamyka panel i wczytuje sejf."""

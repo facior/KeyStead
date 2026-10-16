@@ -218,6 +218,26 @@ class TestMainViewSmoothness(unittest.TestCase):
         self.assertGreater(midway, 0)
         self.assertGreater(bar._start_value, 0)  # suwak nadąża za treścią
 
+    def test_maximize_freezes_drawing_until_layout_is_done(self):
+        import ctypes
+        import sys as _sys
+        from ui import perf
+        if not _sys.platform.startswith("win"):
+            self.skipTest("tylko Windows")
+        freeze = perf.ResizeFreeze(self.root)
+        freezes = []
+        original = freeze._freeze
+        freeze._freeze = lambda: (freezes.append(1), original())
+        self.root.geometry("1900x1000")
+        self.root.update()
+        self.assertEqual(len(freezes), 1)  # duża zmiana naraz – rysowanie wstrzymane na czas układania
+        self.pump(0.25)
+        self.assertFalse(freeze.frozen)
+        self.assertTrue(ctypes.windll.user32.IsWindowVisible(self.root.winfo_id()))  # rysowanie przywrócone
+        self.root.geometry("1930x1000")  # małe przeciągnięcie krawędzi – bez wstrzymywania
+        self.root.update()
+        self.assertEqual(len(freezes), 1)
+
     def test_flat_button_click_and_window_breakpoints(self):
         from ui.flat_button import FlatButton
         clicked = []
