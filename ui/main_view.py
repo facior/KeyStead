@@ -6,6 +6,7 @@ obsługą kosza (Trash / Recycle Bin), wizualizatorem kart płatniczych oraz ser
 
 import os
 import re
+from collections import OrderedDict
 import webbrowser
 from urllib.parse import urlparse
 import threading
@@ -35,6 +36,7 @@ from ui.clipboard import SecureClipboard
 from ui.policy import effective_clipboard, personal_backups_allowed
 from ui.drawer import SlidingDrawer
 from ui.entry_list import EntryList
+from ui.flat_button import FlatButton
 from core.watchtower import attention_count
 from core.site_icons import site_domain
 from ui.site_icons_ui import avatar_for
@@ -102,6 +104,8 @@ class MainView(ctk.CTkFrame):
         self.search_query: str = ""
 
         self._password_revealed = False
+        self._details_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
+        self._detail_fillers = []
         self._totp_timer_id = None
         self._is_compact_sidebar = False
         self._last_win_width = 1200
@@ -115,10 +119,32 @@ class MainView(ctk.CTkFrame):
         self.drawer = SlidingDrawer(self)
 
         # Nasłuchiwanie zmiany rozmiaru okna dla pełnej responsywności
-        self.bind("<Configure>", self._on_window_resized)
+        tk.Misc.bind(self, "<Configure>", self._on_window_resized, "+")
+        self._idle_jobs = [self.after(300, self._warm_up_glyphs), self.after(700, self._prebuild_details)]
+
+    WARM_UP_GLYPHS = "✏️📋🗑️👁🔒🔍🌐♻️✕📂📄⭐⚠️💳🔐"
+
+    def _warm_up_glyphs(self):
+        """
+        Pierwsze użycie emoji w danej czcionce Tk na Windows szuka czcionki zastępczej (~10 ms na znak).
+        Robimy to raz, zaraz po otwarciu sejfu, zamiast przy pierwszym kliknięciu wpisu.
+        """
+        if not self.winfo_exists():
+            return
+        s = self._get_widget_scaling()
+        for family, size, *style in (FONT_BODY, FONT_SMALL, FONT_BODY_BOLD, FONT_TITLE):
+            try:
+                tk.Label(self, text=self.WARM_UP_GLYPHS, font=(family, -int(round(size * s)), *style)).destroy()
+            except tk.TclError:
+                pass
 
     def destroy(self):
         """Zatrzymuje timery i odpina skróty przed zniszczeniem widoku (blokada sejfu)."""
+        for job in getattr(self, "_idle_jobs", []):
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
         if self._totp_timer_id:
             try:
                 self.after_cancel(self._totp_timer_id)
@@ -171,8 +197,8 @@ class MainView(ctk.CTkFrame):
         self._label(head, text=f"📂 Załączniki ({len(entry.attachments)})", font=FONT_SMALL,
                     text_color=COLOR_TEXT_MUTED).pack(side="left")
         if not read_only and self._attachments_allowed():
-            ctk.CTkButton(head, text="+ Dodaj plik", width=95, height=24, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
-                          command=lambda: self._add_attachment(entry)).pack(side="right")
+            FlatButton(head, text="+ Dodaj plik", width=95, height=24, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
+                          command=lambda: self._add_attachment(self._details_entry)).pack(side="right")
         for meta in list(entry.attachments):
             row = self._plain_frame(card)
             row.pack(fill="x", padx=12, pady=2)
@@ -180,11 +206,11 @@ class MainView(ctk.CTkFrame):
             self._label(row, text=f"  {_human_size(meta.get('size', 0))}", font=FONT_SMALL,
                         text_color=COLOR_TEXT_MUTED).pack(side="left")
             if not read_only:
-                ctk.CTkButton(row, text="Usuń", width=50, height=22, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
-                              command=lambda m=meta: self._remove_attachment(entry, m)).pack(side="right", padx=(4, 0))
-            ctk.CTkButton(row, text="Zapisz…", width=62, height=22, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
+                FlatButton(row, text="Usuń", width=50, height=22, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
+                              command=lambda m=meta: self._remove_attachment(self._details_entry, m)).pack(side="right", padx=(4, 0))
+            FlatButton(row, text="Zapisz…", width=62, height=22, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
                           command=lambda m=meta: self._save_attachment_as(m)).pack(side="right", padx=(4, 0))
-            ctk.CTkButton(row, text="Otwórz", width=58, height=22, font=FONT_SMALL, fg_color=COLOR_PRIMARY,
+            FlatButton(row, text="Otwórz", width=58, height=22, font=FONT_SMALL, fg_color=COLOR_PRIMARY,
                           command=lambda m=meta: self._open_attachment(m)).pack(side="right")
 
     def _add_attachment(self, entry: VaultEntry):
@@ -322,24 +348,29 @@ class MainView(ctk.CTkFrame):
         # Prawa strona: Przyciski akcji (każdy wysuwa panel boczny)
         self.actions_box = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         self.actions_box.pack(side="right", padx=15, pady=12)
+        self._toolbar_buttons = []  # (przycisk, pełny opis, krótki opis, szerokość pełna, szerokość krótka)
 
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             self.actions_box,
             text="+ Nowy Wpis",
             fg_color=COLOR_PRIMARY,
             hover_color=COLOR_PRIMARY_HOVER,
             width=100,
             command=self._open_new_entry_dialog
-        ).pack(side="left", padx=3)
+        )
+        btn.pack(side="left", padx=3)
+        self._toolbar_buttons.append((btn, "+ Nowy Wpis", "+ Nowy", 100, 64))
 
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             self.actions_box,
             text="⚡ Generator",
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
             width=85,
             command=self._open_generator_dialog
-        ).pack(side="left", padx=3)
+        )
+        btn.pack(side="left", padx=3)
+        self._toolbar_buttons.append((btn, "⚡ Generator", "⚡", 85, 36))
 
         self.audit_btn = ctk.CTkButton(
             self.actions_box,
@@ -350,24 +381,29 @@ class MainView(ctk.CTkFrame):
             command=self._open_audit_dialog
         )
         self.audit_btn.pack(side="left", padx=3)
+        self._toolbar_buttons.append((self.audit_btn, "🛡️ Audyt Wycieków", "🛡️", 125, 36))
 
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             self.actions_box,
             text="☁️ Kopie i Chmura",
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
             width=115,
             command=self._open_backup_dialog
-        ).pack(side="left", padx=3)
+        )
+        btn.pack(side="left", padx=3)
+        self._toolbar_buttons.append((btn, "☁️ Kopie i Chmura", "☁️", 115, 36))
 
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             self.actions_box,
             text="📥 Import",
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
             width=75,
             command=self._open_import_dialog
-        ).pack(side="left", padx=3)
+        )
+        btn.pack(side="left", padx=3)
+        self._toolbar_buttons.append((btn, "📥 Import", "📥", 75, 36))
 
         ctk.CTkButton(
             self.actions_box,
@@ -439,25 +475,39 @@ class MainView(ctk.CTkFrame):
         self._show_empty_details()
 
     # ----------------- RESPONSYWNOŚĆ OKNA -----------------
+    # Progi szerokości okna (w punktach interfejsu, niezależnie od skalowania Windows)
+    TOOLBAR_ICONS_BELOW = 1180   # przyciski paska: same ikony
+    SIDEBAR_COMPACT_BELOW = 1000 # panel kategorii: same ikony
+    NARROW_BELOW = 900           # węższa lista wpisów, bez licznika wpisów
+
     def _on_window_resized(self, event):
         # Filtrujemy zdarzenia resize tylko z głównego widgetu
-        if event.widget != self:
+        if event.widget is not self:
             return
-
-        w = event.width
-        if abs(w - self._last_win_width) < 25:
+        w = event.width / max(self._get_widget_scaling(), 0.1)
+        layout = (w < self.TOOLBAR_ICONS_BELOW, w < self.SIDEBAR_COMPACT_BELOW, w < self.NARROW_BELOW)
+        if layout == getattr(self, "_layout_mode", None):
             return
-        self._last_win_width = w
+        previous = getattr(self, "_layout_mode", None)
+        self._layout_mode = layout
+        icons_only, compact_sidebar, narrow = layout
 
-        # Breakpoint: < 880px = zwinięte menu (tryb kompaktowy / ikony)
-        if w < 880 and not self._is_compact_sidebar:
-            self._is_compact_sidebar = True
-            self.sidebar_frame.configure(width=60)
-            self._build_sidebar()
-        elif w >= 880 and self._is_compact_sidebar:
-            self._is_compact_sidebar = False
-            self.sidebar_frame.configure(width=220)
-            self._build_sidebar()
+        for btn, full, short, wf, ws in self._toolbar_buttons:
+            btn.configure(text=short if icons_only else full, width=ws if icons_only else wf)
+        if narrow:
+            self.count_badge.pack_forget()
+        elif not self.count_badge.winfo_manager():
+            self.count_badge.pack(side="left", padx=(8, 0))
+        list_width = 250 if narrow else self.entries_list_width
+        if int(self.entries_list_frame.cget("width")) != list_width:
+            self.entries_list_frame.configure(width=list_width)
+
+        # Panel kategorii zwija się automatycznie tylko przy przekroczeniu progu – ręczne przełączenie (☰) zostaje
+        if previous is None or previous[1] != compact_sidebar:
+            if compact_sidebar != self._is_compact_sidebar:
+                self._is_compact_sidebar = compact_sidebar
+                self.sidebar_frame.configure(width=60 if compact_sidebar else 220)
+                self._build_sidebar()
 
     def _toggle_sidebar_manually(self):
         self._is_compact_sidebar = not self._is_compact_sidebar
@@ -775,6 +825,19 @@ class MainView(ctk.CTkFrame):
         return tk.Label(parent, text=text, font=tk_font, fg=text_color, bg=self._bg_of(parent), bd=0, padx=0,
                         pady=self._label_pad_cache[key], anchor=anchor, justify=justify, wraplength=int(wraplength * s))
 
+    def _tk_font(self, font) -> tuple:
+        family, size, *style = font
+        return (family, -int(round(size * self._get_widget_scaling())), *style)
+
+    @staticmethod
+    def _wrap_beside(label: tk.Label, row, *others) -> None:
+        """Tekst w wierszu z przyciskami zawija się do miejsca, które zostaje obok nich (także po zmianie rozmiaru)."""
+        def _on_resize(event):
+            width = max(80, event.width - sum(o.winfo_reqwidth() for o in others) - 16)
+            if abs(int(label.cget("wraplength")) - width) > 6:
+                label.configure(wraplength=width)
+        row.bind("<Configure>", _on_resize, add="+")
+
     @staticmethod
     def _bg_of(parent) -> str:
         try:
@@ -785,23 +848,93 @@ class MainView(ctk.CTkFrame):
                 color = parent.cget("bg_color")
             return parent._apply_appearance_mode(color)
 
+    def _details_shape(self, entry: VaultEntry, entry_id: str) -> tuple:
+        """Układ panelu szczegółów (jakie sekcje i wiersze). Ten sam układ = wystarczy podmienić treść."""
+        category = entry.category.lower()
+        return (
+            entry_id in self.vault.trash,
+            "kart" in category or "bank" in category,  # podgląd karty płatniczej
+            bool(entry.username), bool(entry.password), bool(entry.totp_secret), bool(entry.url),
+            tuple(entry.custom_fields), bool(entry.notes), tuple(entry.tags),
+            tuple((a.get("id"), a.get("name"), a.get("size")) for a in entry.attachments),
+            self._attachments_allowed(), self.icon_provider is not None and bool(entry.url),
+        )
+
     def _render_entry_details(self, entry_id: str):
         entry = self.vault.get_entry(entry_id)
         if not entry:
             self._show_empty_details()
             return
 
-        # Nowy panel powstaje w ukrytej ramce i zastępuje stary w jednym kroku – bez przeliczania
-        # układu okna po każdym dodanym elemencie i bez migania pustego panelu
-        old_children = self.details_scroll.winfo_children()
-        container = self._plain_frame(self.details_scroll)
-        self._build_entry_details(container, entry, entry_id)
-        for w in old_children:
-            w.destroy()
-        container.pack(fill="both", expand=True)
+        # Gotowe panele dla kilku ostatnich układów (jakie sekcje ma wpis). Przejście do wpisu o znanym układzie
+        # to tylko podmiana treści (kilka ms) zamiast budowania panelu od nowa (~100 ms).
+        cache = self._details_cache
+        for key in [k for k, (panel, _state) in cache.items() if not panel.winfo_exists()]:
+            del cache[key]  # panel usunięty razem z zawartością prawego panelu (np. widok kosza)
+        panel, state = self._details_panel_for(entry, entry_id)
+        self._detail_fillers = state["fillers"]
+        for name in self.DETAIL_WIDGETS:
+            setattr(self, name, state[name])
+        self._fill_entry_details(entry)
+        if not panel.winfo_manager():
+            # Zamiana w jednym kroku – bez migania pustego panelu; inne gotowe panele tylko się chowają
+            for w in self.details_scroll.winfo_children():
+                if w is not panel:
+                    if any(w is p for p, _s in cache.values()):
+                        w.pack_forget()
+                    else:
+                        w.destroy()
+            panel.pack(fill="both", expand=True)
+
+    def _details_panel_for(self, entry: VaultEntry, entry_id: str):
+        """Gotowy (być może ukryty) panel dla układu wpisu – z pamięci albo zbudowany teraz."""
+        cache = self._details_cache
+        shape = self._details_shape(entry, entry_id)
+        if shape in cache:
+            cache.move_to_end(shape)
+            return cache[shape]
+        panel = self._plain_frame(self.details_scroll)
+        previous = {name: getattr(self, name, None) for name in self.DETAIL_WIDGETS}
+        previous_fillers = self._detail_fillers
+        self._detail_fillers = []
+        self._details_entry, shown_entry = entry, getattr(self, "_details_entry", None)
+        for name in self.DETAIL_WIDGETS:
+            setattr(self, name, None)
+        self._build_entry_details(panel, entry, entry_id)
+        state = {"fillers": self._detail_fillers, **{name: getattr(self, name) for name in self.DETAIL_WIDGETS}}
+        # budowa nie zmienia tego, co jest teraz na ekranie (ważne przy budowie zawczasu)
+        self._detail_fillers, self._details_entry = previous_fillers, shown_entry
+        for name, widget in previous.items():
+            setattr(self, name, widget)
+        cache[shape] = (panel, state)
+        while len(cache) > 6:
+            cache.popitem(last=False)[1][0].destroy()
+        return panel, state
+
+    def _prebuild_details(self):
+        """Panel szczegółów pierwszego wpisu budowany w chwili bezczynności po otwarciu – pierwsze kliknięcie bez czekania."""
+        if not self.winfo_exists() or self._details_cache or self.selected_entry_id:
+            return
+        first = self.entry_list.items[0]["id"] if self.entry_list.items else None
+        entry = self.vault.get_entry(first) if first else None
+        if entry is not None:
+            self._details_panel_for(entry, first)
+
+    # Widżety panelu odświeżane z zewnątrz (licznik TOTP, „Pokaż hasło”) – osobne w każdym zapamiętanym panelu
+    DETAIL_WIDGETS = ("pwd_display_lbl", "_pwd_toggle_btn", "totp_timer_label", "totp_code_lbl", "totp_progress")
+
+    def _fill_entry_details(self, entry: VaultEntry):
+        self._details_entry = entry
+        for fill in self._detail_fillers:
+            fill(entry)
 
     def _build_entry_details(self, container, entry: VaultEntry, entry_id: str):
-
+        """
+        Buduje układ panelu. Wszystko, co zależy od wpisu, ustawiają funkcje z self._detail_fillers,
+        a przyciski działają na self._details_entry – dzięki temu panel można ponownie użyć dla innego wpisu.
+        """
+        fillers = self._detail_fillers
+        current = lambda: self._details_entry  # noqa: E731
         is_in_trash = (entry_id in self.vault.trash)
 
         # 1. Pasek informacyjny jeśli wpis jest w koszu
@@ -811,8 +944,8 @@ class MainView(ctk.CTkFrame):
             r = self._plain_frame(trash_bar)
             r.pack(fill="x", padx=12, pady=4)
             self._label(r, text="⚠️ Ten wpis znajduje się w koszu.", font=FONT_BODY_BOLD, text_color="#ffffff").pack(side="left")
-            ctk.CTkButton(r, text="Przywróć ♻️", width=95, fg_color=COLOR_SUCCESS, command=lambda: self._restore_entry(entry)).pack(side="right", padx=(0, 6))
-            ctk.CTkButton(r, text="Usuń trwale ✕", width=95, fg_color="#991b1b", command=lambda: self._purge_entry(entry)).pack(side="right")
+            FlatButton(r, text="Przywróć ♻️", width=95, fg_color=COLOR_SUCCESS, command=lambda: self._restore_entry(current())).pack(side="right", padx=(0, 6))
+            FlatButton(r, text="Usuń trwale ✕", width=95, fg_color="#991b1b", command=lambda: self._purge_entry(current())).pack(side="right")
 
         # 2. Nagłówek szczegółów: Tytuł, Kategoria, Akcje
         top_header = self._plain_frame(container)
@@ -820,27 +953,45 @@ class MainView(ctk.CTkFrame):
 
         title_col = self._plain_frame(top_header)
         title_col.pack(side="left", fill="x", expand=True)
+        title_lbl = self._label(title_col, font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w", justify="left")
+        title_lbl.pack(anchor="w", fill="x")
+        category_lbl = self._label(title_col, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
+        category_lbl.pack(anchor="w")
 
-        fav_symbol = "⭐ " if entry.favorite else ""
-        icon = self._get_category_icon(entry.category)
-        site_icon = self.icon_provider.image(site_domain(entry.url), int(30 * self._get_widget_scaling())) \
-            if self.icon_provider is not None and entry.url else None
-        title_lbl = self._label(title_col, text=f"{'' if site_icon else icon + ' '}{fav_symbol}{entry.title}",
-                                font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w")
-        if site_icon is not None:
-            title_lbl.configure(image=site_icon, compound="left", padx=0)
+        def fill_header(e: VaultEntry):
+            fav_symbol = "⭐ " if e.favorite else ""
+            site_icon = self.icon_provider.image(site_domain(e.url), int(30 * self._get_widget_scaling())) \
+                if self.icon_provider is not None and e.url else None
+            if site_icon is not None:
+                title_lbl.configure(image=site_icon, compound="left", text=f"  {fav_symbol}{e.title}")
+            else:
+                title_lbl.configure(image="", text=f"{self._get_category_icon(e.category)} {fav_symbol}{e.title}")
             title_lbl.image = site_icon  # referencja – inaczej obraz znika
-            title_lbl.configure(text="  " + title_lbl.cget("text"))
-        title_lbl.pack(anchor="w")
-        self._label(title_col, text=f"Kategoria: {entry.category}", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w")
+            category_lbl.configure(text=f"Kategoria: {e.category}")
+        fillers.append(fill_header)
 
         if not is_in_trash:
             btn_actions = self._plain_frame(top_header)
-            btn_actions.pack(side="right")
+            btn_actions.pack(side="right", anchor="n")
+            narrow_state = {"narrow": None}
 
-            ctk.CTkButton(btn_actions, text="✏️ Edytuj", width=75, fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, command=lambda: self._open_edit_entry_dialog(entry)).pack(side="left", padx=3)
-            ctk.CTkButton(btn_actions, text="📋 Duplikuj", width=80, fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, command=lambda: self._duplicate_entry(entry)).pack(side="left", padx=3)
-            ctk.CTkButton(btn_actions, text="🗑️ Do kosza", width=85, fg_color=COLOR_DANGER, command=lambda: self._delete_entry(entry)).pack(side="left", padx=3)
+            def _header_layout(event):
+                narrow = event.width < 520 * self._get_widget_scaling()
+                if narrow != narrow_state["narrow"]:
+                    narrow_state["narrow"] = narrow
+                    btn_actions.pack_forget()
+                    title_col.pack_forget()
+                    if narrow:
+                        title_col.pack(side="top", fill="x")
+                        btn_actions.pack(side="top", anchor="w", pady=(8, 0))
+                    else:
+                        btn_actions.pack(side="right", anchor="n")
+                        title_col.pack(side="left", fill="x", expand=True)
+                title_lbl.configure(wraplength=max(120, event.width - (0 if narrow else btn_actions.winfo_reqwidth() + 16)))
+            container.bind("<Configure>", _header_layout, add="+")
+            FlatButton(btn_actions, text="✏️ Edytuj", width=75, fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, command=lambda: self._open_edit_entry_dialog(current())).pack(side="left", padx=3)
+            FlatButton(btn_actions, text="📋 Duplikuj", width=80, fg_color=COLOR_CARD_DARK, hover_color=COLOR_CARD_HOVER, command=lambda: self._duplicate_entry(current())).pack(side="left", padx=3)
+            FlatButton(btn_actions, text="🗑️ Do kosza", width=85, fg_color=COLOR_DANGER, command=lambda: self._delete_entry(current())).pack(side="left", padx=3)
 
         # 3. Specjalny wizualizator dla Kart Płatniczych
         if "kart" in entry.category.lower() or "bank" in entry.category.lower():
@@ -856,8 +1007,11 @@ class MainView(ctk.CTkFrame):
 
             u_b = self._plain_frame(u_card)
             u_b.pack(fill="x", padx=12, pady=(0, 6))
-            self._label(u_b, text=entry.username, font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY).pack(side="left")
-            ctk.CTkButton(u_b, text="Kopiuj", width=65, height=26, fg_color=COLOR_PANEL_DARK, command=lambda: self._copy_to_clipboard(entry.username, "Login skopiowany!")).pack(side="right")
+            FlatButton(u_b, text="Kopiuj", width=65, height=26, fg_color=COLOR_PANEL_DARK, command=lambda: self._copy_to_clipboard(current().username, "Login skopiowany!")).pack(side="right")
+            user_lbl = self._label(u_b, font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY, anchor="w", justify="left")
+            user_lbl.pack(side="left", fill="x", expand=True)
+            self._wrap_beside(user_lbl, u_b, u_b.winfo_children()[0])
+            fillers.append(lambda e: user_lbl.configure(text=e.username))
 
         # 5. Blok Hasła
         if entry.password:
@@ -867,46 +1021,73 @@ class MainView(ctk.CTkFrame):
             p_h = self._plain_frame(p_card)
             p_h.pack(fill="x", padx=12, pady=(6, 2))
             self._label(p_h, text="Hasło", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left")
-
-            eval_res = evaluate_password_strength(entry.password)
-            self._label(p_h, text=f"Siła: {eval_res['label']} ({eval_res['entropy']} bitów)", font=FONT_SMALL, text_color=eval_res["color"]).pack(side="right")
+            strength_lbl = self._label(p_h, font=FONT_SMALL)
+            strength_lbl.pack(side="right")
 
             p_b = self._plain_frame(p_card)
             p_b.pack(fill="x", padx=12, pady=(2, 6))
-
-            displayed_pwd = entry.password if self._password_revealed else "•" * min(len(entry.password), 24)
-            self.pwd_display_lbl = ctk.CTkLabel(p_b, text=displayed_pwd, font=FONT_CODE if self._password_revealed else ("Consolas", 18, "bold"), text_color=COLOR_TEXT_PRIMARY)
+            self.pwd_display_lbl = ctk.CTkLabel(p_b, text="", font=("Consolas", 18, "bold"), text_color=COLOR_TEXT_PRIMARY)
             self.pwd_display_lbl.pack(side="left")
 
             p_acts = self._plain_frame(p_b)
             p_acts.pack(side="right")
+            self._pwd_toggle_btn = FlatButton(p_acts, text="👁 Pokaż", width=78, height=28, fg_color=COLOR_PANEL_DARK, command=lambda: self._toggle_details_password(current().password))
+            self._pwd_toggle_btn.pack(side="left", padx=(0, 5))
+            FlatButton(p_acts, text="Kopiuj hasło", width=95, height=28, fg_color=COLOR_PRIMARY, command=lambda: self._copy_password_safe(current().password)).pack(side="left")
+            pwd_state = {"narrow": None}
 
-            ctk.CTkButton(p_acts, text="🔒 Ukryj" if self._password_revealed else "👁 Pokaż", width=70, height=28, fg_color=COLOR_PANEL_DARK, command=lambda: self._toggle_details_password(entry.password)).pack(side="left", padx=(0, 5))
-            ctk.CTkButton(p_acts, text="Kopiuj hasło", width=95, height=28, fg_color=COLOR_PRIMARY, command=lambda: self._copy_password_safe(entry.password)).pack(side="left")
+            def _password_layout(event, dots=self.pwd_display_lbl, acts=p_acts):
+                narrow = event.width < 470 * self._get_widget_scaling()
+                if narrow == pwd_state["narrow"]:
+                    return
+                pwd_state["narrow"] = narrow
+                acts.pack_forget()
+                dots.pack_forget()
+                if narrow:
+                    dots.pack(side="top", anchor="w")
+                    acts.pack(side="top", anchor="w", pady=(4, 0))
+                else:
+                    dots.pack(side="left")
+                    acts.pack(side="right")
+            p_b.bind("<Configure>", _password_layout, add="+")
 
             # Inline weryfikacja wycieku HIBP
             leak_box = self._plain_frame(p_card)
             leak_box.pack(fill="x", padx=12, pady=(4, 6))
-            leak_status_lbl = ctk.CTkLabel(leak_box, text="Weryfikacja wycieków (Have I Been Pwned - k-Anonymity):", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED)
-            leak_status_lbl.pack(side="left")
+            leak_status_lbl = self._label(leak_box, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w", justify="left")
 
-            def _check_leak_action(pwd=entry.password, lbl=leak_status_lbl):
-                lbl.configure(text="Sprawdzanie w bazie HIBP...", text_color=COLOR_PRIMARY_LIGHT)
+            def _check_leak_action(lbl=leak_status_lbl):
+                checked = current()
+                lbl.configure(text="Sprawdzanie w bazie HIBP...", fg=COLOR_PRIMARY_LIGHT)
 
                 def _ui(res):
-                    if not lbl.winfo_exists():
-                        return
+                    if not lbl.winfo_exists() or self._details_entry is not checked:
+                        return  # w międzyczasie wybrano inny wpis
                     is_pwned, cnt = res
                     if is_pwned:
-                        lbl.configure(text=f"🚨 WYCIEKŁO! Znaleziono {cnt:,} razy w znanych wyciekach!", text_color=COLOR_DANGER, font=FONT_BODY_BOLD)
+                        lbl.configure(text=f"🚨 WYCIEKŁO! Znaleziono {cnt:,} razy w znanych wyciekach!", fg=COLOR_DANGER, font=self._tk_font(FONT_BODY_BOLD))
                     elif cnt < 0:
-                        lbl.configure(text="⚠️ Nie udało się połączyć z HIBP (brak internetu?).", text_color=COLOR_WARNING, font=FONT_BODY_BOLD)
+                        lbl.configure(text="⚠️ Nie udało się połączyć z HIBP (brak internetu?).", fg=COLOR_WARNING, font=self._tk_font(FONT_BODY_BOLD))
                     else:
-                        lbl.configure(text="✅ Bezpieczne: Hasło NIE występuje w znanych wyciekach (HIBP).", text_color=COLOR_SUCCESS, font=FONT_BODY_BOLD)
+                        lbl.configure(text="✅ Bezpieczne: Hasło NIE występuje w znanych wyciekach (HIBP).", fg=COLOR_SUCCESS, font=self._tk_font(FONT_BODY_BOLD))
 
-                self._run_in_background(lambda: check_password_breach_hibp(pwd), _ui)
+                self._run_in_background(lambda pwd=checked.password: check_password_breach_hibp(pwd), _ui)
 
-            ctk.CTkButton(leak_box, text="Sprawdź wyciek 🔍", width=120, height=24, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK, command=_check_leak_action).pack(side="right")
+            leak_btn = FlatButton(leak_box, text="Sprawdź wyciek 🔍", width=120, height=24, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK, command=_check_leak_action)
+            leak_btn.pack(side="right")
+            leak_status_lbl.pack(side="left", fill="x", expand=True)
+            self._wrap_beside(leak_status_lbl, leak_box, leak_btn)
+
+            def fill_password(e: VaultEntry):
+                eval_res = evaluate_password_strength(e.password)
+                strength_lbl.configure(text=f"Siła: {eval_res['label']} ({eval_res['entropy']} bitów)", fg=eval_res["color"])
+                self.pwd_display_lbl.configure(
+                    text=e.password if self._password_revealed else "•" * min(len(e.password), 24),
+                    font=FONT_CODE if self._password_revealed else ("Consolas", 18, "bold"))
+                self._pwd_toggle_btn.configure(text="🔒 Ukryj" if self._password_revealed else "👁 Pokaż")
+                leak_status_lbl.configure(text="Weryfikacja wycieków (Have I Been Pwned - k-Anonymity):",
+                                          fg=COLOR_TEXT_MUTED, font=self._tk_font(FONT_SMALL))
+            fillers.append(fill_password)
 
         # 6. Blok TOTP 2FA
         if entry.totp_secret:
@@ -921,17 +1102,18 @@ class MainView(ctk.CTkFrame):
 
             t_b = self._plain_frame(totp_card)
             t_b.pack(fill="x", padx=12, pady=(2, 6))
-
-            cur_code = get_current_totp(entry.totp_secret) or "--- ---"
-            fmt_code = f"{cur_code[:3]} {cur_code[3:]}" if len(cur_code) == 6 else cur_code
-            self.totp_code_lbl = ctk.CTkLabel(t_b, text=fmt_code, font=FONT_TOTP, text_color=COLOR_SUCCESS)
+            self.totp_code_lbl = ctk.CTkLabel(t_b, text="--- ---", font=FONT_TOTP, text_color=COLOR_SUCCESS)
             self.totp_code_lbl.pack(side="left")
-
-            ctk.CTkButton(t_b, text="Kopiuj kod 2FA", width=110, height=28, fg_color=COLOR_SUCCESS, command=lambda: self._copy_current_totp(entry)).pack(side="right")
+            FlatButton(t_b, text="Kopiuj kod 2FA", width=110, height=28, fg_color=COLOR_SUCCESS, command=lambda: self._copy_current_totp(current())).pack(side="right")
 
             self.totp_progress = ctk.CTkProgressBar(totp_card, height=4)
             self.totp_progress.pack(fill="x", padx=12, pady=(0, 4))
-            self.totp_progress.set(get_totp_remaining_seconds() / 30.0)
+
+            def fill_totp(e: VaultEntry):
+                cur_code = get_current_totp(e.totp_secret) or "--- ---"
+                self.totp_code_lbl.configure(text=f"{cur_code[:3]} {cur_code[3:]}" if len(cur_code) == 6 else cur_code)
+                self.totp_progress.set(get_totp_remaining_seconds() / 30.0)
+            fillers.append(fill_totp)
 
         # 7. URL
         if entry.url:
@@ -943,8 +1125,11 @@ class MainView(ctk.CTkFrame):
 
             u_b = self._plain_frame(url_card)
             u_b.pack(fill="x", padx=12, pady=(0, 6))
-            self._label(u_b, text=entry.url, font=FONT_BODY, text_color=COLOR_TEXT_ACCENT).pack(side="left")
-            ctk.CTkButton(u_b, text="Otwórz stronę 🌐", width=130, height=26, fg_color=COLOR_PANEL_DARK, command=lambda: self._open_url(entry.url)).pack(side="right")
+            FlatButton(u_b, text="Otwórz stronę 🌐", width=130, height=26, fg_color=COLOR_PANEL_DARK, command=lambda: self._open_url(current().url)).pack(side="right")
+            url_lbl = self._label(u_b, font=FONT_BODY, text_color=COLOR_TEXT_ACCENT, anchor="w", justify="left")
+            url_lbl.pack(side="left", fill="x", expand=True)
+            self._wrap_beside(url_lbl, u_b, u_b.winfo_children()[0])
+            fillers.append(lambda e: url_lbl.configure(text=e.url))
 
         # 8. Pola niestandardowe
         if entry.custom_fields:
@@ -952,19 +1137,30 @@ class MainView(ctk.CTkFrame):
             cf_card.pack(fill="x", pady=(0, 10), ipady=6)
             self._label(cf_card, text="Pola niestandardowe", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=12, pady=(6, 4))
 
-            for k, v in entry.custom_fields.items():
+            for k in entry.custom_fields:
                 row = self._plain_frame(cf_card)
                 row.pack(fill="x", padx=12, pady=2)
+                FlatButton(row, text="Kopiuj", width=60, height=22, fg_color=COLOR_PANEL_DARK, command=lambda name=k: self._copy_to_clipboard(str(current().custom_fields.get(name, "")), f"Skopiowano {name}!")).pack(side="right")
                 self._label(row, text=f"{k}:", font=FONT_BODY_BOLD, text_color=COLOR_TEXT_MUTED).pack(side="left")
-                self._label(row, text=str(v), font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY).pack(side="left", padx=6)
-                ctk.CTkButton(row, text="Kopiuj", width=60, height=22, fg_color=COLOR_PANEL_DARK, command=lambda val=v, name=k: self._copy_to_clipboard(str(val), f"Skopiowano {name}!")).pack(side="right")
+                value_lbl = self._label(row, font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, anchor="w", justify="left")
+                value_lbl.pack(side="left", padx=6, fill="x", expand=True)
+                self._wrap_beside(value_lbl, row, *row.winfo_children()[:2])
+                fillers.append(lambda e, name=k, lbl=value_lbl: lbl.configure(text=str(e.custom_fields.get(name, ""))))
 
-        # 9. Notatki
+        # 9. Notatki – zawijane do bieżącej szerokości panelu (także po zmianie rozmiaru okna)
         if entry.notes:
             n_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
             n_card.pack(fill="x", pady=(0, 10), ipady=6)
             self._label(n_card, text="Bezpieczne notatki", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=12, pady=(6, 4))
-            self._label(n_card, text=entry.notes, font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, wraplength=480, justify="left").pack(anchor="w", padx=12, pady=(0, 6))
+            notes_lbl = self._label(n_card, font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, wraplength=480, justify="left", anchor="w")
+            notes_lbl.pack(anchor="w", fill="x", padx=12, pady=(0, 6))
+
+            def _rewrap(event, lbl=notes_lbl):
+                width = max(200, event.width - 30)
+                if abs(int(lbl.cget("wraplength")) - width) > 8:
+                    lbl.configure(wraplength=width)
+            n_card.bind("<Configure>", _rewrap, add="+")
+            fillers.append(lambda e: notes_lbl.configure(text=e.notes))
 
         # 9b. Załączniki
         self._render_attachments(container, entry, read_only=is_in_trash)
@@ -987,25 +1183,34 @@ class MainView(ctk.CTkFrame):
         self._label(top_r, text="💳 CHIP", font=FONT_CODE, text_color="#cbd5e1").pack(side="left")
         self._label(top_r, text="VIRTUAL CARD", font=FONT_BODY_BOLD, text_color=COLOR_PRIMARY_LIGHT).pack(side="right")
 
-        # Numer karty
-        raw_num = entry.custom_fields.get("Numer karty") or entry.password or "•••• •••• •••• ••••"
-        fmt_num = " ".join([raw_num[i:i+4] for i in range(0, len(raw_num), 4)]) if len(raw_num) == 16 else raw_num
-        num_lbl = ctk.CTkLabel(card_box, text=fmt_num, font=("Consolas", 17, "bold"), text_color="#f8fafc")
+        num_lbl = self._label(card_box, font=("Consolas", 17, "bold"), text_color="#f8fafc", anchor="w")
         num_lbl.pack(anchor="w", padx=20, pady=(6, 8))
 
         # Dolny wiersz karty: Właściciel, Ważność, CVV
         bot_r = self._plain_frame(card_box)
         bot_r.pack(fill="x", padx=20, pady=(0, 10))
+        holder_lbl = self._label(bot_r, font=FONT_SMALL, text_color="#cbd5e1", justify="left")
+        holder_lbl.pack(side="left")
+        exp_lbl = self._label(bot_r, font=FONT_SMALL, text_color="#cbd5e1", justify="left")
+        exp_lbl.pack(side="left", padx=25)
+        cvv_lbl = self._label(bot_r, font=FONT_SMALL, text_color="#cbd5e1", justify="left")
+        cvv_lbl.pack(side="left")
 
-        holder = entry.custom_fields.get("Właściciel karty") or entry.username or "KARTOWNIK"
-        exp = entry.custom_fields.get("Ważność") or "MM/RR"
-        cvv = entry.custom_fields.get("CVV/CVC") or "•••"
+        def card_number(e: VaultEntry) -> str:
+            return e.custom_fields.get("Numer karty") or e.password or "•••• •••• •••• ••••"
 
-        self._label(bot_r, text=f"WŁAŚCICIEL:\n{holder.upper()}", font=FONT_SMALL, text_color="#cbd5e1", justify="left").pack(side="left")
-        self._label(bot_r, text=f"WAŻNOŚĆ:\n{exp}", font=FONT_SMALL, text_color="#cbd5e1", justify="left").pack(side="left", padx=25)
-        self._label(bot_r, text=f"CVV:\n{cvv}", font=FONT_SMALL, text_color="#cbd5e1", justify="left").pack(side="left")
+        FlatButton(bot_r, text="Kopiuj numer", width=95, height=24, fg_color="#4338ca",
+                   command=lambda: self._copy_to_clipboard(card_number(self._details_entry).replace(" ", ""),
+                                                           "Numer karty skopiowany!")).pack(side="right")
 
-        ctk.CTkButton(bot_r, text="Kopiuj numer", width=95, height=24, fg_color="#4338ca", command=lambda: self._copy_to_clipboard(raw_num.replace(" ", ""), "Numer karty skopiowany!")).pack(side="right")
+        def fill_card(e: VaultEntry):
+            raw_num = card_number(e)
+            num_lbl.configure(text=" ".join(raw_num[i:i + 4] for i in range(0, len(raw_num), 4)) if len(raw_num) == 16 else raw_num)
+            holder = e.custom_fields.get("Właściciel karty") or e.username or "KARTOWNIK"
+            holder_lbl.configure(text=f"WŁAŚCICIEL:\n{holder.upper()}")
+            exp_lbl.configure(text=f"WAŻNOŚĆ:\n{e.custom_fields.get('Ważność') or 'MM/RR'}")
+            cvv_lbl.configure(text=f"CVV:\n{e.custom_fields.get('CVV/CVC') or '•••'}")
+        self._detail_fillers.append(fill_card)
 
     def _copy_current_totp(self, entry: VaultEntry):
         code = get_current_totp(entry.totp_secret)
@@ -1016,9 +1221,12 @@ class MainView(ctk.CTkFrame):
 
     def _toggle_details_password(self, password: str):
         self._password_revealed = not self._password_revealed
-        if hasattr(self, "pwd_display_lbl"):
+        if getattr(self, "pwd_display_lbl", None) is not None:
             displayed_pwd = password if self._password_revealed else "•" * min(len(password), 24)
             self.pwd_display_lbl.configure(text=displayed_pwd, font=FONT_CODE if self._password_revealed else ("Consolas", 18, "bold"))
+        button = getattr(self, "_pwd_toggle_btn", None)
+        if button is not None and button.winfo_exists():
+            button.configure(text="🔒 Ukryj" if self._password_revealed else "👁 Pokaż")
 
     def _open_url(self, url: str):
         url = url.strip()
@@ -1050,10 +1258,15 @@ class MainView(ctk.CTkFrame):
         """Plakietka na przycisku audytu: liczba haseł wymagających uwagi (czerwona przy wycieku)."""
         if not self.winfo_exists():
             return
-        text = f"🛡️ Audyt Wycieków ({count})" if count else "🛡️ Audyt Wycieków"
+        full = f"🛡️ Audyt Wycieków ({count})" if count else "🛡️ Audyt Wycieków"
+        short = f"🛡️ {count}" if count else "🛡️"
+        widths = (150 if count else 125, 52 if count else 36)
+        self._toolbar_buttons = [(b, full, short, *widths) if b is self.audit_btn else (b, f, sh, wf, ws)
+                                 for b, f, sh, wf, ws in self._toolbar_buttons]
+        icons_only = bool(getattr(self, "_layout_mode", None) and self._layout_mode[0])
         color = (COLOR_DANGER, "#e11d48") if critical else ("#7c3aed", "#6d28d9")
-        self.audit_btn.configure(text=text, fg_color=color[0], hover_color=color[1],
-                                 width=150 if count else 125)
+        self.audit_btn.configure(text=short if icons_only else full, fg_color=color[0], hover_color=color[1],
+                                 width=widths[1] if icons_only else widths[0])
 
     def show_toast(self, message: str, error: bool = False):
         """Krótki komunikat w prawym dolnym rogu okna."""
@@ -1077,18 +1290,15 @@ class MainView(ctk.CTkFrame):
 
     def _start_totp_ticker(self):
         rem = get_totp_remaining_seconds()
-        if hasattr(self, "totp_progress") and self.totp_progress.winfo_exists():
-            self.totp_progress.set(rem / 30.0)
-            if hasattr(self, "totp_timer_label"):
+        progress = getattr(self, "totp_progress", None)
+        if progress is not None and progress.winfo_exists() and progress.winfo_ismapped():
+            progress.set(rem / 30.0)
+            if getattr(self, "totp_timer_label", None) is not None:
                 self.totp_timer_label.configure(text=f"Wygasa za: {rem}s")
-
-            if hasattr(self, "totp_code_lbl") and self.totp_code_lbl.winfo_exists():
-                if self.selected_entry_id:
-                    entry = self.vault.get_entry(self.selected_entry_id)
-                    if entry and entry.totp_secret and hasattr(self, "totp_code_lbl"):
-                        new_code = get_current_totp(entry.totp_secret) or "--- ---"
-                        fmt = f"{new_code[:3]} {new_code[3:]}" if len(new_code) == 6 else new_code
-                        self.totp_code_lbl.configure(text=fmt)
+            entry = getattr(self, "_details_entry", None)
+            if getattr(self, "totp_code_lbl", None) is not None and entry is not None and entry.totp_secret:
+                new_code = get_current_totp(entry.totp_secret) or "--- ---"
+                self.totp_code_lbl.configure(text=f"{new_code[:3]} {new_code[3:]}" if len(new_code) == 6 else new_code)
 
         self._totp_timer_id = self.after(1000, self._start_totp_ticker)
 

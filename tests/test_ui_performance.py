@@ -144,6 +144,68 @@ class TestMainViewSmoothness(unittest.TestCase):
         self.assertFalse(drawer.panel.winfo_ismapped())
         self.assertEqual(drawer.content_container.winfo_children(), [])
 
+    def labels_text(self):
+        def walk(w):
+            for c in w.winfo_children():
+                yield c
+                yield from walk(c)
+        panel = self.view._details_cache[next(reversed(self.view._details_cache))][0]
+        return " ".join(str(w.cget("text")) for w in walk(panel) if w.winfo_class() == "Label")
+
+    def test_details_panel_reused_with_current_entry(self):
+        ids = [e["id"] for e in self.view.entry_list.items]
+        a, b = self.vault.get_entry(ids[0]), self.vault.get_entry(ids[2])  # ten sam układ sekcji
+        self.view._select_entry(a.id)
+        self.pump()
+        panel = self.view._details_cache[next(reversed(self.view._details_cache))][0]
+        self.view._select_entry(b.id)
+        self.pump()
+        self.assertIs(self.view._details_cache[next(reversed(self.view._details_cache))][0], panel)
+        self.assertIn(b.username, self.labels_text())
+        self.assertNotIn(a.username, self.labels_text())
+        # przyciski działają na pokazanym wpisie, nie na tym, dla którego panel zbudowano
+        self.assertIs(self.view._details_entry, b)
+        # „Pokaż hasło” na ponownie użytym panelu
+        self.view._toggle_details_password(b.password)
+        self.assertEqual(self.view.pwd_display_lbl.cget("text"), b.password)
+        self.assertIn("Ukryj", self.view._pwd_toggle_btn.cget("text"))
+        self.view._select_entry(a.id)  # nowy wpis – hasło znów ukryte
+        self.pump()
+        self.assertNotIn(a.password, self.view.pwd_display_lbl.cget("text"))
+        self.assertIn("Pokaż", self.view._pwd_toggle_btn.cget("text"))
+
+    def test_different_layout_gets_own_panel_and_old_one_is_kept(self):
+        ids = [e["id"] for e in self.view.entry_list.items]
+        first = self.vault.get_entry(ids[0])
+        self.view._select_entry(first.id)
+        self.pump()
+        other = self.vault.get_entry(ids[1])
+        other.notes = "Notatka tylko w tym wpisie"
+        self.view._select_entry(other.id)
+        self.pump()
+        self.assertEqual(len(self.view._details_cache), 2)
+        self.assertIn("Notatka tylko w tym wpisie", self.labels_text())
+        mapped = [p.winfo_ismapped() for p, _s in self.view._details_cache.values()]
+        self.assertEqual(sorted(mapped), [False, True])  # widoczny tylko jeden panel
+
+    def test_flat_button_click_and_window_breakpoints(self):
+        from ui.flat_button import FlatButton
+        clicked = []
+        btn = FlatButton(self.view.details_scroll, text="✏️ Edytuj", width=75, command=lambda: clicked.append(1))
+        btn.pack()
+        self.pump()
+        btn.event_generate("<ButtonRelease-1>", x=5, y=5)
+        btn.event_generate("<ButtonRelease-1>", x=-50, y=5)  # puszczone poza przyciskiem – bez akcji
+        self.assertEqual(clicked, [1])
+        self.root.geometry("820x600")
+        self.pump(0.3)
+        self.assertTrue(self.view._is_compact_sidebar)
+        self.assertEqual(self.view._toolbar_buttons[1][0].cget("text"), "⚡")
+        self.root.geometry("1300x800")
+        self.pump(0.3)
+        self.assertFalse(self.view._is_compact_sidebar)
+        self.assertEqual(self.view._toolbar_buttons[1][0].cget("text"), "⚡ Generator")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,3 +40,4 @@ def apply() -> None:
             self._ks_draw_pending = False
 
     ctk.CTkScrollbar.set = set_coalesced
+
