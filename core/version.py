@@ -1,7 +1,7 @@
 """Wersja aplikacji KeyStead Manager (podnoszona przy każdym wydaniu – tools/release_app.py)."""
 
 APP_NAME = "KeyStead Manager"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 # Wersjonowanie produktu: pierwsze dwie liczby wspólne dla aplikacji i serwera (nowe funkcje – razem),
 # ostatnia osobno (poprawki). Aplikacja X.Y.* współpracuje z serwerem X.Y.* (i nowszym).

@@ -1,152 +1,153 @@
-# 🛡️ KeyStead Manager - Profesjonalny Menedżer Haseł
+# 🛡️ KeyStead Manager
 
-Nowoczesny, bezpieczny menedżer haseł o architekturze **Zero-Knowledge**, stworzony w Pythonie z eleganckim, w pełni responsywnym interfejsem (`CustomTkinter`). Zamiast wyskakujących okien dialogowych aplikacja posiada **płynnie wysuwany z prawej strony panel boczny (Sliding Drawer)**, obsługę **kopii zapasowych w chmurze** (WebDAV / Nextcloud, Google Drive, OneDrive, Dropbox, USB), **kreator importu** (Bitwarden, KeePass, 1Password, LastPass, przeglądarki), **Kosz z opcją przywracania**, **wizualizator kart płatniczych** oraz **Centrum Audytu Wycieków (HIBP)**.
+**A zero-knowledge password manager for Windows, built for IT departments and small businesses.**
 
----
+Your passwords are encrypted on your own computer and never leave it in readable form. Use KeyStead on its own,
+with a local encrypted vault, or connect it to your company's self-hosted
+**[KeyStead Server](https://github.com/facior/KeyStead-Manager)** to sync across devices and let IT manage
+accounts, policies and recovery.
 
-## ⬇️ Pobieranie (Windows)
-
-Najnowsza wersja: **[Wydania → najnowsze](https://github.com/facior/KeyStead/releases/latest)**
-
-- `KeyStead-Manager-Setup-X.Y.Z.exe` – instalator (bez uprawnień administratora; skrót w menu Start),
-- `KeyStead-Manager-X.Y.Z-portable.zip` – wersja przenośna, bez instalacji.
-
-Aplikacja sama sprawdza nowe wersje i instaluje je po kliknięciu – wyłącznie wydania z poprawnym podpisem
-wydawcy (`SHA256SUMS.sig`, klucz Ed25519). Przy pierwszym uruchomieniu Windows może pokazać ostrzeżenie
-SmartScreen: *Więcej informacji → Uruchom mimo to*.
-
-Serwer synchronizacji dla firm i zespołów (Linux, panel WEB administratora): **[facior/KeyStead-Manager](https://github.com/facior/KeyStead-Manager)**.
+> **Language:** the application interface is currently in **Polish**. Menu names in this guide are given in Polish,
+> followed by an English explanation.
 
 ---
 
-## 🚀 Uruchomienie z kodu źródłowego
+## ⬇️ Download and install
 
-1. Uruchomienie za pomocą skrótu:
-   - Kliknij dwukrotnie plik `uruchom.bat` w folderze głównym.
+**Requirements:** Windows 10 or 11 (64-bit).
 
-2. LUB ręcznie z poziomu wiersza poleceń / PowerShell:
-   ```powershell
-   python -m pip install -r requirements.txt
-   python main.py
-   ```
+Get the latest version from **[Releases → Latest](https://github.com/facior/KeyStead/releases/latest)**:
 
----
+| File | What it is |
+|---|---|
+| `KeyStead-Manager-Setup-X.Y.Z.exe` | Installer. No administrator rights needed; adds a Start menu shortcut. |
+| `KeyStead-Manager-X.Y.Z-portable.zip` | Portable version. Unzip and run, no installation. |
 
-## 🔒 Architektura Bezpieczeństwa (Security Model)
+If your company uses KeyStead Server, IT will give you a download link
+(`https://<your-server>/download`) and an **activation code**.
 
-- **Zero-Knowledge Encryption**: Twoje hasła są szyfrowane i deszyfrowane wyłącznie lokalnie na Twoim komputerze.
-- **Argon2id (RFC 9106)**: Zwycięzca konkursu Password Hashing Competition. Odporny na ataki brute-force z wykorzystaniem GPU/ASIC (64 MB pamięci RAM, 4 wątki, sól 256-bitowa).
-- **AES-256-GCM (NIST Authenticated Encryption)**: Uwierzytelnione szyfrowanie symetryczne z 96-bitowym losowym wektorem inicjalizacyjnym (Nonce) oraz 128-bitowym tagiem uwierzytelniającym. Zabezpiecza dane przed podsłuchem oraz jakimkolwiek manipulowaniem zawartością pliku.
-- **Weryfikacja wycieków haseł (Have I Been Pwned z k-Anonymity)**: Sprawdzanie czy hasło figuruje w globalnych wyciekach danych bez wysyłania hasła przez sieć (wysyłane jest jedynie pierwsze 5 znaków skrótu SHA-1).
-- **Centrum Audytu Bezpieczeństwa (Watchtower)**: Kompleksowy raport kondycji sejfu:
-  - 🚨 Wykrywanie wyciekłych haseł w sieci (HIBP)
-  - 🔁 Wykrywanie powtórzonych haseł współdzielonych przez różne konta
-  - ⚠️ Wykrywanie słabych haseł o niskiej entropii
-  - 🛡️ Identyfikacja kont bez zabezpieczenia 2FA / TOTP
-  - ⏳ Wykrywanie starych haseł (niezmienianych > 180 dni)
-  - Przycisk szybkiej naprawy i bezpośredniego wygenerowania nowego hasła
-- **Ochrona Schowka**: Po skopiowaniu hasła do schowka systemowego, uruchamiany jest timer bezpieczeństwa (domyślnie 30 sekund), który bezpowrotnie usuwa hasło ze schowka.
-- **Automatyczna blokada (Auto-lock)**: Sejf automatycznie blokuje się po określonym czasie bezczynności użytkownika.
-- **Plik-klucz (Keyfile)**: Opcjonalne dodatkowe zabezpieczenie sejfu drugim składnikiem w postaci pliku z dysku (np. pendrive'a).
+**Windows SmartScreen** may warn about an unknown publisher on first launch. Click **More info → Run anyway**.
+
+**Automatic updates:** the app checks for new versions and installs them when you click. Only releases
+signed with the publisher's key are accepted (Ed25519 signature over `SHA256SUMS`), so a tampered download is rejected.
 
 ---
 
-## 📥 Import z Innych Menedżerów Haseł
+## 🚀 Getting started
 
-Program zawiera uniwersalny **Kreator Importu**, który potrafi automatycznie rozpoznać format pliku lub pozwolić na ręczny wybór:
+### On your own (local vault)
 
-1. **Bitwarden**:
-   - Eksport nieszyfrowany JSON (`folders`, `items`, typy: Login, Bezpieczna notatka, Karta płatnicza, Tożsamość, kody TOTP, pola niestandardowe).
-   - Eksport CSV Bitwarden.
-2. **KeePass**:
-   - Bezpośredni odczyt baz **`.kdbx`** (wymaga podania hasła bazy KeePass oraz opcjonalnego pliku klucza).
-   - Eksport XML oraz CSV z KeePass.
-3. **1Password**:
-   - Format **`.1pux`** (archiwa ZIP z eksportem 1Password).
-   - Eksport CSV z 1Password.
-4. **LastPass**:
-   - Eksport CSV (url, login, hasło, notatki, grupy, TOTP).
-5. **Przeglądarki internetowe**:
-   - Eksport CSV z Google Chrome, Microsoft Edge, Brave, Mozilla Firefox.
+1. Start KeyStead Manager. A short first-run guide opens.
+2. Create your vault and choose a **master password**. This is the only password you need to remember. It cannot be
+   recovered by anyone, so make it long and memorable (a phrase of several words works well).
+3. Optional: add a **keyfile** (for example, a file on a USB stick) as a second factor.
+4. Recommended: create a **personal recovery code** in **Ustawienia → Odzyskiwanie dostępu** (Settings → Account
+   recovery). Print it or store it somewhere safe. It lets you regain access if you forget your master password.
 
-### Rozwiązywanie konfliktów duplikatów:
-- *Pomiń istniejące wpisy*
-- *Dodaj wszystkie jako nowe*
-- *Zaktualizuj istniejące wpisy*
+### With your company's KeyStead Server
 
----
+1. On the login screen, open the **🌐 Serwer** (Server) tab.
+2. Enter the server address from IT, or click **🔍 Tailscale** to find it automatically if your company uses Tailscale.
+3. Enter the **activation code** from IT (one-time, valid for 24 hours by default).
+4. Enter your master password.
 
-## ☁️ Kopie Zapasowe i Chmura (Backup Center)
-
-Wszystkie kopie zapasowe przed wysłaniem są **w pełni zaszyfrowane kluczem głównym sejfu (AES-256-GCM)** z dołączoną sumą kontrolną SHA-256.
-
-1. **Dysk lokalny / Nośnik USB / Dysk sieciowy**:
-   - Automatyczne tworzenie kopii ze znacznikiem czasu (`sejf_backup_YYYYMMDD_HHMMSS.vault`).
-   - Automatyczna rotacja starszych kopii (np. zachowywanie ostatnich 15 wersji).
-2. **WebDAV (Nextcloud / ownCloud / Synology NAS / QNAP)**:
-   - Połączenie przez HTTPS z dowolnym serwerem WebDAV.
-   - Obsługa autoryzacji login/hasło oraz tokenów aplikacji (App passwords).
-   - Automatyczne tworzenie katalogu docelowego (`MKCOL`) i transfer pliku (`PUT`).
-3. **Dysk Google / Microsoft OneDrive / Dropbox – logowanie w przeglądarce**:
-   - Przycisk *Zaloguj przez Google / Microsoft / Dropbox* otwiera oficjalną stronę logowania dostawcy (OAuth 2.0 + PKCE). Aplikacja nigdy nie widzi hasła do konta chmury.
-   - Tokeny dostępu są przechowywane wyłącznie w zaszyfrowanym pliku sejfu i odświeżane automatycznie.
-   - Kopie trafiają do folderu `KeyStead-Backups` (Google Drive: zakres `drive.file` – aplikacja widzi tylko utworzone przez siebie pliki).
-   - Alternatywnie: zapis do lokalnego folderu synchronizacji (Google Drive for Desktop, OneDrive, Dropbox).
-   - **Jednorazowa konfiguracja:** każdy dostawca wymaga zarejestrowania aplikacji i wpisania jej *Client ID* w sekcji *Konfiguracja logowania do chmury* (instrukcja krok po kroku pod przyciskiem *❓ Jak uzyskać Client ID*). Adres przekierowania: `http://localhost:53682/`.
-4. **Automatyczny backup w tle**:
-   - Opcja automatycznego tworzenia kopii na wszystkich skonfigurowanych platformach przy każdym zapisie wpisu (w osobnym wątku, bez zacinania interfejsu).
+On first connection you can upload an existing vault or create a new one. On each additional computer, ask IT for
+a new activation code and use the same master password. Corporate proxies are detected automatically from Windows
+settings.
 
 ---
 
-## 🌐 Własny Serwer Synchronizacji (Ubuntu + Tailscale)
+## ✨ Features
 
-Sejf może być synchronizowany między komputerami (np. dom ↔ praca) przez własny serwer na Linuksie.
-Serwer przechowuje wyłącznie zaszyfrowany plik i historię wersji – hasło główne nigdy nie opuszcza Twojego komputera.
-W aplikacji: ekran logowania → zakładka **🌐 Serwer**. Instalacja i konfiguracja: [server/README.md](server/README.md).
+### Everyday use
+- **Entries** for logins, secure notes, payment cards and identities, with categories, tags, favourites and site icons.
+- **Instant search** by title, username, address, notes and tags.
+- **Safe copying:** copied passwords are cleared from the clipboard automatically (after 30 seconds by default).
+- **Built-in authenticator (2FA / TOTP):** live codes with a countdown. Paste an `otpauth://` link from a QR code.
+- **Password generator:** random passwords (8–64 characters, optionally without look-alike characters such as
+  `0 O 1 l I`) and easy-to-remember word phrases, with a strength meter.
+- **Password history:** every change keeps the previous password with its date.
+- **Attachments:** store scans, licence files or keys inside an entry. They are encrypted like the rest of the vault.
+- **Trash:** deleted entries can be restored.
+
+### Quick access from any program
+| Shortcut | What it does |
+|---|---|
+| **Ctrl+Shift+Space** | Quick search window. **Enter** copies the password, **Shift+Enter** the username, **Ctrl+Enter** the 2FA code. |
+| **Ctrl+Shift+L** | **Autotype:** types your username and password into the login form you are looking at. |
+
+Shortcuts can be changed or turned off in the settings.
+
+**Autotype in web browsers checks the real web address.** In Chrome, Edge, Firefox, Opera and other browsers based on
+them, KeyStead reads the address bar, not just the window title. A fake page that copies your bank's title but has
+a different address gets **nothing typed**. KeyStead shows a warning instead: *"To może być fałszywa strona"*
+(This may be a fake page). The address is checked once more right before typing.
+
+- If a service uses more than one login address (for example, Microsoft 365), list the extra addresses in the
+  entry's custom field **Autotype adresy**, separated by commas. Or confirm the warning once with
+  *"To moja strona – wpisz"* (This is my site – type it), and KeyStead remembers the address.
+- To change what gets typed, add a custom field **Sekwencja autotype**, for example
+  `{USERNAME}{TAB}{PASSWORD}{TAB}{TOTP}{ENTER}`.
+- In desktop programs (not browsers), Autotype matches the window title to the entry name or website.
+
+### Locking and unlocking
+- **Auto-lock** after inactivity (5 minutes by default) and when you lock Windows (**Win+L**).
+- **Windows Hello:** unlock with your PIN, fingerprint or face. You still type the master password every 14 days.
+
+### Security monitoring
+- **Breach watch (Have I Been Pwned):** once a day KeyStead can check whether your passwords appear in known data
+  breaches. It asks for your consent first. Your passwords never leave your computer: only the first 5 characters of
+  a SHA-1 hash are sent (k-anonymity).
+- **Security audit (Watchtower):** finds breached, reused, weak and old passwords (older than 180 days) and accounts
+  without 2FA, with a one-click fix to generate a new password.
+- **PDF report** of your vault's security status.
+
+### Import from other password managers
+| Source | Formats |
+|---|---|
+| Bitwarden | unencrypted JSON export, CSV |
+| KeePass | `.kdbx` database (with its password and optional keyfile), XML, CSV |
+| 1Password | `.1pux`, CSV |
+| LastPass | CSV |
+| Browsers | CSV export from Chrome, Edge, Brave, Firefox |
+
+When duplicates are found, you choose whether to skip them, add them as new entries or update the existing ones.
+**Import → Porządkowanie wpisów** (Tidy up entries) cleans up imported titles afterwards.
+
+### Backups
+All backups are encrypted with your vault key (AES-256-GCM) and include a SHA-256 checksum.
+- **Local disk, USB stick or network drive**, with timestamped copies and automatic rotation.
+- **WebDAV** (Nextcloud, ownCloud, Synology, QNAP) over HTTPS.
+- **Google Drive, OneDrive, Dropbox:** sign in through the provider's own page (OAuth 2.0 with PKCE), so KeyStead
+  never sees your cloud password. Each provider needs a one-time *Client ID*; the app shows how to get one.
+- **Automatic backup** after every change, in the background.
+
+Your company may disable private backups through a server policy.
 
 ---
 
-## 🔑 Dodatkowe Funkcje
+## 🔒 Security model
 
-- **Wbudowany Authenticator TOTP (2FA)**:
-  - Generuje kody dwuskładnikowe zgodnie z RFC 6238.
-  - Odliczanie na żywo z paskiem postępu (30 sekund).
-  - Obsługuje linki `otpauth://totp/...` wklejane prosto z kodów QR!
-- **Generator Haseł i Passphrase (Diceware)**:
-  - Losowe hasła o regulowanej długości (8-64 znaków) z wykluczeniem mylących znaków (`0, O, 1, l, I`).
-  - Hasła wielowyrazowe (łatwe do zapamiętania, a kryptograficznie silne frazy).
-  - Wskaźnik siły oraz entropii hasła w bitach.
-- **Wyszukiwanie Błyskawiczne**:
-  - Filtrowanie w czasie rzeczywistym po tytule, loginie, adresie URL, notatkach i tagach.
-- **Historia haseł**:
-  - Każda zmiana hasła we wpisie zachowuje poprzednie hasło w historii wraz z datą archiwizacji.
+- **Zero-knowledge:** encryption and decryption happen only on your computer. A KeyStead Server stores encrypted
+  vaults only.
+- **Key derivation:** Argon2id (RFC 9106): 64 MB of memory, 3 iterations, 4 threads, 256-bit salt.
+- **Encryption:** AES-256-GCM with a random 96-bit nonce and a 128-bit authentication tag, which detects any
+  tampering with the file.
+- **Protection against old-version replay:** each save carries a revision number inside the encrypted data, so
+  a server cannot silently hand back an older copy of your vault.
+- **Signed updates:** the app installs only releases signed by the publisher, and re-checks the installer right
+  before running it.
+- **Device credentials** for the server are protected with Windows DPAPI.
 
 ---
 
-## 🧪 Testy Jednostkowe
+## 🔢 Versions
 
-Pakiet posiada zestaw 121 testów weryfikujących kryptografię, parsery, import, audyt, logowanie OAuth, zabezpieczenia, kopie zapasowe, serwer synchronizacji i panel administratora:
+The first two numbers are shared by the app and the server; the last one is for fixes in one part only.
+App **2.0.x** works with server **2.0.x** and newer.
 
-```powershell
-python -m unittest discover tests
-```
+## Author and licence
 
----
-
-## 📦 Budowanie pliku wykonywalnego (.exe)
-
-Aplikację można skompilować do samodzielnego pliku wykonywalnego na system Windows za pomocą PyInstaller:
-
-```powershell
-pyinstaller --noconsole --onefile --name "KeyStead" main.py
-```
-Plik `.exe` znajdzie się w katalogu `dist/`.
-
-
-## Wersje, autor i licencja
-
-- **Numeracja wersji:** pierwsze dwie liczby są wspólne dla aplikacji i serwera (nowe funkcje wydawane razem),
-  ostatnia oznacza poprawki tylko w jednej części. Aplikacja **2.0.x** współpracuje z serwerem **2.0.x** i nowszym.
-- **Autor:** Łukasz Kubieniec – [github.com/facior](https://github.com/facior)
-- **Licencja:** © 2026 Łukasz Kubieniec. Wszelkie prawa zastrzeżone. Oprogramowanie zastrzeżone – udostępnienie kodu
-  nie oznacza udzielenia licencji; szczegóły w pliku [LICENSE](LICENSE).
+- **Author:** Łukasz Kubieniec – [github.com/facior](https://github.com/facior)
+- **Licence:** © 2026 Łukasz Kubieniec. All rights reserved. This is proprietary software. Publishing the source code
+  does not grant a licence; see [LICENSE](LICENSE).

@@ -8,10 +8,12 @@ import copy
 import hmac
 import os
 import queue
+import re
 import sys
-import time
 import threading
+import time
 import webbrowser
+from datetime import datetime, timezone
 from typing import Optional
 import customtkinter as ctk
 
@@ -24,7 +26,7 @@ from core.crypto import Keyring, org_key_id, parse_org_public_key
 from core.storage import background_saver
 from core.watchtower import CONSENT_KEY as WATCH_CONSENT_KEY, Watchtower, attention_count, consent as watch_consent
 from core.winsys import flash_window, is_session_locked
-from ui.quick_access import QuickAccess
+from ui.quick_access import ADDRESSES_FIELD, QuickAccess
 from ui.quick_unlock_ui import file_target, policy_allows, quick, server_target, valid_days
 from core.security_audit import run_vault_audit
 from core.vault import Vault
@@ -315,6 +317,21 @@ class PasswordManagerApp(ctk.CTk):
 
     def autotype_allowed(self) -> bool:
         return (self.current_policy() or {}).get("allow_autotype", True) is not False
+
+    def remember_autotype_host(self, entry_id: str, host: str):
+        """Autotype potwierdzony na innej stronie niż adres wpisu – zapamiętanie jej w polu „Autotype adresy”."""
+        view = self._current_view
+        entry = self.current_vault.get_entry(entry_id) if self.current_vault else None
+        if not isinstance(view, MainView) or entry is None:
+            return
+        known = [h for h in re.split(r"[,;\s]+", entry.custom_fields.get(ADDRESSES_FIELD) or "") if h]
+        if host in known:
+            return
+        entry.custom_fields[ADDRESSES_FIELD] = ", ".join([*known, host])
+        entry.updated_at = datetime.now(timezone.utc).isoformat()
+        view._save_vault_to_disk()
+        if view.selected_entry_id == entry.id:
+            view._render_entry_details(entry.id)
 
     def quick_copy(self, entry_id: str, what: str):
         """Kopiowanie z okienka szybkiego wyszukiwania – przez bezpieczny schowek (z czyszczeniem)."""

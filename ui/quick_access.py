@@ -5,6 +5,10 @@ Szybki dostęp z dowolnego programu:
 
 Bezpieczeństwo Autotype: okno docelowe jest zapamiętywane w chwili naciśnięcia skrótu i sprawdzane przed
 wpisaniem każdego fragmentu – jeśli w międzyczasie aktywne jest inne okno, wpisywanie zostaje przerwane.
+
+W przeglądarce wpis jest dobierany po prawdziwym adresie strony (z paska adresu), nie po tytule okna, który może
+ustawić dowolna strona. Gdy adres nie pasuje do wpisu (np. fałszywa strona banku), nic nie jest wpisywane bez
+wyraźnego potwierdzenia, a tuż przed wpisaniem adres jest sprawdzany ponownie.
 """
 
 import json
@@ -18,20 +22,21 @@ from urllib.parse import urlparse
 
 import customtkinter as ctk
 
-from core import winsys
+from core import browser_url, winsys
 from core.paths import APP_DIR
 from core.totp_service import get_current_totp
 from core.vault import Vault, VaultEntry
 from ui.entry_list import EntryList
 from ui.site_icons_ui import avatar_for
-from ui.theme import (COLOR_BORDER, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_TEXT_MUTED, FONT_BODY, FONT_SMALL,
-                      FONT_SUBTITLE)
+from ui.theme import (COLOR_BORDER, COLOR_DANGER, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_TEXT_MUTED, FONT_BODY,
+                      FONT_SMALL, FONT_SUBTITLE)
 
 PREFS_FILE = os.path.join(APP_DIR, "hotkeys.json")
 DEFAULT_PREFS = {"enabled": True, "search": "Ctrl+Shift+Space", "autotype": "Ctrl+Shift+L"}
 DEFAULT_SEQUENCE = "{USERNAME}{TAB}{PASSWORD}{ENTER}"
 SEQUENCE_FIELD = "Sekwencja autotype"
 WINDOW_FIELD = "Autotype okno"
+ADDRESSES_FIELD = "Autotype adresy"  # dodatkowe strony logowania wpisu (np. login.microsoftonline.com), po przecinku
 
 
 def load_prefs() -> Dict[str, Any]:
@@ -99,6 +104,36 @@ def single_best_match(matches: List[Tuple[int, VaultEntry]]) -> Optional[VaultEn
     return None
 
 
+# --------------------------------------------------------------------- dopasowanie wpisu do adresu strony
+def entry_hosts(entry: VaultEntry) -> List[str]:
+    """Strony, na których wolno wpisać dane wpisu: adres wpisu + pole „Autotype adresy”."""
+    extra = re.split(r"[,;\s]+", entry.custom_fields.get(ADDRESSES_FIELD) or "")
+    return browser_url.allowed_hosts([entry.url, *extra])
+
+
+def entry_allowed_on(entry: VaultEntry, host: str) -> Optional[bool]:
+    """True/False – czy strona pasuje do wpisu; None – wpis nie ma żadnego adresu (nie da się sprawdzić)."""
+    hosts = entry_hosts(entry)
+    if not hosts:
+        return None
+    return any(browser_url.host_matches(host, h) for h in hosts)
+
+
+def browser_matches(vault: Vault, host: str) -> List[Tuple[int, VaultEntry]]:
+    """Wpisy pasujące do adresu strony (dokładny adres przed domeną nadrzędną)."""
+    scored = []
+    for entry in vault.entries.values():
+        if not (entry.password or entry.username):
+            continue
+        hosts = entry_hosts(entry)
+        if host in hosts:
+            scored.append((2, entry))
+        elif any(browser_url.host_matches(host, h) for h in hosts):
+            scored.append((1, entry))
+    scored.sort(key=lambda s: (-s[0], s[1].title.lower()))
+    return scored
+
+
 # --------------------------------------------------------------------- sekwencja Autotype
 _TOKEN_RE = re.compile(r"\{(USERNAME|PASSWORD|TAB|ENTER|TOTP|DELAY=\d{1,4})\}", re.IGNORECASE)
 
@@ -131,8 +166,11 @@ class AutotypeAborted(Exception):
 
 
 def perform_autotype(entry: VaultEntry, target_hwnd: int, sequence: Optional[str] = None,
-                     typer=None, foreground=None, activate=None) -> None:
-    """Wpisuje dane wpisu w okno `target_hwnd`. Wywoływać w wątku roboczym (czeka i wpisuje z opóźnieniami)."""
+                     typer=None, foreground=None, activate=None, verify: Optional[Callable[[], None]] = None) -> None:
+    """
+    Wpisuje dane wpisu w okno `target_hwnd`. Wywoływać w wątku roboczym (czeka i wpisuje z opóźnieniami).
+    `verify` – ostatnie sprawdzenie tuż przed wpisaniem (np. czy przeglądarka nadal jest na tej samej stronie).
+    """
     typer = typer or winsys
     foreground = foreground or (lambda: winsys.foreground_window()[0])
     activate = activate or winsys.activate_window
@@ -140,6 +178,8 @@ def perform_autotype(entry: VaultEntry, target_hwnd: int, sequence: Optional[str
     if foreground() != target_hwnd:
         activate(target_hwnd)
         time.sleep(0.25)
+    if verify is not None:
+        verify()
 
     def _check():
         if foreground() != target_hwnd:
@@ -165,9 +205,11 @@ class QuickSearchPopup(ctk.CTkToplevel):
     """Małe okno na środku ekranu. mode='copy' (Ctrl+Shift+Spacja) albo 'autotype' (wybór wpisu do wpisania)."""
 
     def __init__(self, master, vault: Vault, mode: str, on_copy: Callable[[str, str], None],
-                 on_autotype: Optional[Callable[[VaultEntry], None]] = None, query: str = ""):
+                 on_autotype: Optional[Callable[[VaultEntry], None]] = None, query: str = "", note: str = "",
+                 candidates: Optional[List[VaultEntry]] = None):
         super().__init__(master, fg_color=COLOR_PANEL_DARK)
         self.vault, self.mode = vault, mode
+        self.candidates = candidates  # lista startowa (pusta fraza), np. wpisy pasujące do adresu strony
         self.on_copy, self.on_autotype = on_copy, on_autotype
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -181,6 +223,9 @@ class QuickSearchPopup(ctk.CTkToplevel):
         frame.pack(fill="both", expand=True)
         title = "⌨️ Autotype – wybierz wpis do wpisania" if mode == "autotype" else "🔍 Szybkie wyszukiwanie"
         ctk.CTkLabel(frame, text=title, font=FONT_SUBTITLE).pack(anchor="w", padx=14, pady=(10, 4))
+        if note:
+            ctk.CTkLabel(frame, text=note, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=520,
+                         justify="left").pack(anchor="w", padx=14, pady=(0, 6))
         self.entry = ctk.CTkEntry(frame, placeholder_text="Wpisz nazwę, login lub adres...", height=36, font=FONT_BODY)
         self.entry.pack(fill="x", padx=14)
         if query:
@@ -233,8 +278,12 @@ class QuickSearchPopup(ctk.CTkToplevel):
         if query == self._last_query:
             return
         self._last_query = query
-        results = self.vault.search(query=query) if query else sorted(
-            self.vault.entries.values(), key=lambda e: (not e.favorite, e.title.lower()))
+        if query:
+            results = self.vault.search(query=query)
+        elif self.candidates:
+            results = list(self.candidates)
+        else:
+            results = sorted(self.vault.entries.values(), key=lambda e: (not e.favorite, e.title.lower()))
         results = results[:200]
         items = []
         for e in results:
@@ -260,6 +309,63 @@ class QuickSearchPopup(ctk.CTkToplevel):
         else:
             self.on_copy(entry.id, what)
         return "break"
+
+    def close(self):
+        if self.winfo_exists():
+            self.destroy()
+
+
+class AutotypeWarning(ctk.CTkToplevel):
+    """Strona w przeglądarce nie pasuje do wpisu – możliwa fałszywa strona. Domyślnie nic nie jest wpisywane."""
+
+    def __init__(self, master, entry: VaultEntry, host: str, on_confirm: Callable[[], None]):
+        super().__init__(master, fg_color=COLOR_PANEL_DARK)
+        self.on_confirm = on_confirm
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        s = self._get_window_scaling()
+        w, h = 520, 270
+        x = (self.winfo_screenwidth() - int(w * s)) // 2
+        y = (self.winfo_screenheight() - int(h * s)) // 3
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+        frame = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK, border_width=2, border_color=COLOR_DANGER, corner_radius=0)
+        frame.pack(fill="both", expand=True)
+        ctk.CTkLabel(frame, text="⚠️ To może być fałszywa strona", font=FONT_SUBTITLE,
+                     text_color=COLOR_DANGER).pack(anchor="w", padx=16, pady=(14, 8))
+        allowed = ", ".join(entry_hosts(entry))
+        ctk.CTkLabel(frame, text=f"Jesteś na stronie:  {host}\nWpis „{entry.title}” jest dla:  {allowed}",
+                     font=FONT_BODY, justify="left", wraplength=480).pack(anchor="w", padx=16)
+        ctk.CTkLabel(frame, text=("Login i hasło NIE zostały wpisane. Wpisz je tylko wtedy, gdy masz pewność, "
+                                  "że to prawdziwa strona logowania tej usługi – KeyStead ją wtedy zapamięta."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, justify="left", wraplength=480
+                     ).pack(anchor="w", padx=16, pady=(10, 0))
+        row = ctk.CTkFrame(frame, fg_color="transparent")
+        row.pack(fill="x", side="bottom", padx=16, pady=14)
+        self.cancel_btn = ctk.CTkButton(row, text="Nie wpisuj", width=140, fg_color=COLOR_PRIMARY, command=self.close)
+        self.cancel_btn.pack(side="right")
+        self.confirm_btn = ctk.CTkButton(row, text="To moja strona – wpisz", width=200, fg_color="transparent",
+                                         border_width=1, border_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED,
+                                         command=self._confirm)
+        self.confirm_btn.pack(side="right", padx=(0, 10))
+        self.bind("<Escape>", lambda e: self.close())
+        self.bind("<Return>", lambda e: self.close())  # Enter = bezpieczny wybór
+        self.after(30, self._grab_focus)
+
+    def _grab_focus(self):
+        if not self.winfo_exists():
+            return
+        try:
+            self.lift()
+            if winsys.IS_WINDOWS:
+                winsys.force_foreground(int(self.wm_frame(), 16))
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _confirm(self):
+        self.close()
+        self.on_confirm()
 
     def close(self):
         if self.winfo_exists():
@@ -327,8 +433,16 @@ class QuickAccess:
             if not self.app.autotype_allowed():
                 self.app.notify("Autotype jest wyłączony przez politykę Twojej firmy.", error=True)
                 return
-            if not hwnd or winsys.window_pid(hwnd) == os.getpid():
+            pid = winsys.window_pid(hwnd) if hwnd else 0
+            if not hwnd or pid == os.getpid():
                 self.app.notify("Autotype: najpierw kliknij pole logowania w programie lub na stronie.", error=True)
+                return
+            if browser_url.is_browser(pid):
+                # Adres strony odczytywany w tle (kilkadziesiąt ms), dalej znów w wątku interfejsu
+                def _read():
+                    url = browser_url.read_browser_url(hwnd, pid)
+                    self.app.post_to_ui(lambda: self._autotype_in_browser(vault, hwnd, title, url))
+                threading.Thread(target=_read, daemon=True).start()
                 return
             matches = autotype_matches(vault, title)
             best = single_best_match(matches)
@@ -339,12 +453,63 @@ class QuickAccess:
             self.popup = QuickSearchPopup(self.app, vault, "autotype", on_copy=self.app.quick_copy,
                                           on_autotype=lambda entry: self.run_autotype(entry, hwnd), query=query)
 
-    def run_autotype(self, entry: VaultEntry, hwnd: int) -> None:
+    def _autotype_in_browser(self, vault: Vault, hwnd: int, title: str, url: Optional[str]) -> None:
+        """Przeglądarka: wpis dobierany po prawdziwym adresie strony, nie po tytule okna."""
+        if self.app.current_vault is not vault:
+            return  # sejf zablokowany w międzyczasie
+        if self.popup is not None and self.popup.winfo_exists():
+            self.popup.close()
+        host = browser_url.page_host(url) if url else None
+        if host is None:
+            # Adresu nie udało się odczytać – nigdy automatycznie, tylko świadomy wybór z listy
+            matches = autotype_matches(vault, title)
+            self.popup = QuickSearchPopup(
+                self.app, vault, "autotype", on_copy=self.app.quick_copy,
+                on_autotype=lambda entry: self.run_autotype(entry, hwnd), query=matches[0][1].title if matches else "",
+                note="Nie udało się sprawdzić adresu strony – upewnij się, że to właściwa strona, i wybierz wpis.")
+            return
+        matches = browser_matches(vault, host)
+        best = single_best_match(matches)
+        if best is not None:
+            self.run_autotype(best, hwnd, expected_host=host)
+            return
+        if not matches:
+            by_title = single_best_match(autotype_matches(vault, title))
+            if by_title is not None and entry_allowed_on(by_title, host) is False:
+                # Tytuł udaje znaną stronę, ale adres jest inny – typowy fałszywy formularz logowania
+                self._warn(by_title, hwnd, host)
+                return
+        self.popup = QuickSearchPopup(
+            self.app, vault, "autotype", on_copy=self.app.quick_copy,
+            on_autotype=lambda entry: self._autotype_checked(entry, hwnd, host),
+            candidates=[e for _, e in matches] or None,
+            note=f"Strona: {host}" + ("" if matches else " – żaden wpis nie ma tego adresu."))
+
+    def _autotype_checked(self, entry: VaultEntry, hwnd: int, host: str) -> None:
+        """Wpis wybrany ręcznie w przeglądarce – gdy ma inny adres niż strona, najpierw ostrzeżenie."""
+        if entry_allowed_on(entry, host) is False:
+            self._warn(entry, hwnd, host)
+        else:
+            self.run_autotype(entry, hwnd, expected_host=host)
+
+    def _warn(self, entry: VaultEntry, hwnd: int, host: str) -> None:
+        def _confirmed():
+            self.app.remember_autotype_host(entry.id, host)
+            self.run_autotype(entry, hwnd, expected_host=host)
+        self.popup = AutotypeWarning(self.app, entry, host, on_confirm=_confirmed)
+
+    def run_autotype(self, entry: VaultEntry, hwnd: int, expected_host: Optional[str] = None) -> None:
         self.app.on_user_activity()
+
+        def _verify():
+            # Strona mogła się zmienić od naciśnięcia skrótu (przekierowanie, inna karta)
+            now = browser_url.page_host(browser_url.read_browser_url(hwnd) or "")
+            if now != expected_host:
+                raise AutotypeAborted("Strona w przeglądarce zmieniła się – przerwano, nic nie zostało wpisane.")
 
         def _worker():
             try:
-                perform_autotype(entry, hwnd)
+                perform_autotype(entry, hwnd, verify=_verify if expected_host else None)
             except AutotypeAborted as e:
                 msg = str(e)
                 self.app.post_to_ui(lambda: self.app.notify(msg, error=True))

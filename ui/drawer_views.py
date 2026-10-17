@@ -1352,7 +1352,9 @@ class SettingsDrawerView(ctk.CTkFrame):
                 note += "  (wyłączone przez politykę firmy)"
             ctk.CTkLabel(row, text=note, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(side="left", padx=8)
             self._hotkey_entries[key] = entry
-        ctk.CTkLabel(card, text=("Autotype dopasowuje wpis do tytułu okna (nazwa wpisu lub domena strony). "
+        ctk.CTkLabel(card, text=("Autotype dopasowuje wpis do tytułu okna (nazwa wpisu lub domena strony), a w przeglądarce "
+                                 "do prawdziwego adresu strony – na stronie z innym adresem niczego nie wpisze bez "
+                                 "potwierdzenia. Dodatkowe strony logowania wpisu podasz w polu „Autotype adresy”. "
                                  "Własną kolejność wpisywania ustawisz w polu niestandardowym „Sekwencja autotype”, "
                                  "np. {USERNAME}{TAB}{PASSWORD}{TAB}{TOTP}{ENTER}."),
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=440, justify="left"
