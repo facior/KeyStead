@@ -12,14 +12,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# Przed czymkolwiek innym: nowsza biblioteka C++ niż stara kopia z pakietu Windows Hello (patrz core/runtime_dlls.py)
+from core.runtime_dlls import preload_cpp_runtime  # noqa: E402
+preload_cpp_runtime()
+
 
 def selftest(out_path: str) -> int:
     """Diagnostyka zbudowanego programu (bez otwierania okna i bez dostępu do sejfu)."""
     import json
     from core.version import APP_VERSION
     result = {"version": APP_VERSION, "frozen": bool(getattr(sys, "frozen", False)), "modules": {}}
-    for name in ("customtkinter", "cryptography", "argon2", "pykeepass", "winrt.windows.security.credentials",
-                 "winrt.windows.security.cryptography", "core.quick_unlock", "ui.quick_access"):
+    for name in ("customtkinter", "cryptography", "argon2", "importers.kdbx", "winrt.windows.security.credentials",
+                 "winrt.windows.security.cryptography", "core.quick_unlock", "ui.quick_access", "zxingcpp",
+                 "ui.plugin_dialogs", "ui.plugins_view", "core.ssh_agent", "ykman.hid", "yubikit.yubiotp"):
         try:
             __import__(name)
             result["modules"][name] = "ok"
@@ -30,9 +35,20 @@ def selftest(out_path: str) -> int:
         result["windows_hello_available"] = WindowsHelloProvider().is_available()
     except Exception as e:
         result["windows_hello_available"] = f"{type(e).__name__}: {e}"
+    try:
+        from core.i18n import load_catalog
+        result["translations_en"] = len(load_catalog("en"))  # pliki core/locales trafiły do programu
+    except Exception as e:
+        result["translations_en"] = f"{type(e).__name__}: {e}"
+    try:
+        from core import qr
+        result["qr_round_trip"] = qr.read_codes(qr.make_image("keystead")) == ["keystead"]  # wtyczki z kodami QR
+    except Exception as e:
+        result["qr_round_trip"] = f"{type(e).__name__}: {e}"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
-    return 0 if all(v == "ok" for v in result["modules"].values()) else 1
+    ok = isinstance(result["translations_en"], int) and result["translations_en"] > 0 and result["qr_round_trip"] is True
+    return 0 if ok and all(v == "ok" for v in result["modules"].values()) else 1
 
 
 def main():

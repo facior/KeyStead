@@ -10,6 +10,7 @@ from typing import Optional, Callable, Dict, Any
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
+from core.i18n import N_, _, _n
 from core.vault import Vault, VaultEntry
 from core.storage import save_vault
 from core.generator import evaluate_password_strength, generate_passphrase, check_master_password
@@ -62,7 +63,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.on_vault_ready = on_vault_ready
         self.on_import_requested = on_import_requested
 
-        self.title("Witaj w KeyStead Manager - Przewodnik Pierwszego Uruchomienia")
+        self.title(_("Witaj w KeyStead Manager - Przewodnik Pierwszego Uruchomienia"))
         self.geometry("760x780")
         self.minsize(700, 680)
 
@@ -76,9 +77,9 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.flow_mode = "new"  # 'new' lub 'import'
 
         # Dane konfiguracyjne sejfu
-        self.vault_name = "Mój Główny Sejf"
+        self.vault_name = _("Mój Główny Sejf")
         default_dir = os.path.join(os.path.expanduser("~"), "Documents")
-        self.vault_file_path = os.path.join(default_dir, "MojSejf.vault")
+        self.vault_file_path = os.path.join(default_dir, _("MojSejf.vault"))
         self.master_password = ""
         self.keyfile_bytes: Optional[bytes] = None
         self.created_vault: Optional[Vault] = None
@@ -110,10 +111,10 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         self.step_labels = []
         steps = [
-            ("1", "Powitanie"),
-            ("2", "Twój Sejf"),
-            ("3", "Kopie Zapasowe"),
-            ("4", "Gotowe!")
+            ("1", _("Powitanie")),
+            ("2", _("Twój Sejf")),
+            ("3", _("Kopie Zapasowe")),
+            ("4", _("Gotowe!"))
         ]
 
         steps_box = ctk.CTkFrame(self.step_indicator_frame, fg_color="transparent")
@@ -157,7 +158,7 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         self.back_btn = ctk.CTkButton(
             self.bottom_nav,
-            text="🠔 Wstecz",
+            text=_("🠔 Wstecz"),
             width=110,
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
@@ -167,7 +168,7 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         self.next_btn = ctk.CTkButton(
             self.bottom_nav,
-            text="Dalej ➔",
+            text=_("Dalej ➔"),
             width=130,
             fg_color=COLOR_PRIMARY,
             hover_color=COLOR_PRIMARY_HOVER,
@@ -197,19 +198,19 @@ class OnboardingWizard(ctk.CTkToplevel):
         if step == 1:
             self._render_step_1()
             self.back_btn.pack_forget()
-            self.next_btn.configure(text="Dalej ➔", fg_color=COLOR_PRIMARY)
+            self.next_btn.configure(text=_("Dalej ➔"), fg_color=COLOR_PRIMARY)
         elif step == 2:
             self.back_btn.pack(side="left")
             self._render_step_2()
-            self.next_btn.configure(text="Utwórz i szyfruj ➔", fg_color=COLOR_PRIMARY)
+            self.next_btn.configure(text=_("Utwórz i szyfruj ➔"), fg_color=COLOR_PRIMARY)
         elif step == 3:
             self.back_btn.pack(side="left")
             self._render_step_3()
-            self.next_btn.configure(text="Zapisz i kontynuuj ➔", fg_color=COLOR_PRIMARY)
+            self.next_btn.configure(text=_("Zapisz i kontynuuj ➔"), fg_color=COLOR_PRIMARY)
         elif step == 4:
             self.back_btn.pack_forget()
             self._render_step_4()
-            self.next_btn.configure(text="Otwórz mój sejf 🚀", fg_color=COLOR_SUCCESS, hover_color=COLOR_SUCCESS_HOVER)
+            self.next_btn.configure(text=_("Otwórz mój sejf 🚀"), fg_color=COLOR_SUCCESS, hover_color=COLOR_SUCCESS_HOVER)
 
     # ----------------- KROK 1: POWITANIE -----------------
     def _render_step_1(self):
@@ -218,10 +219,10 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         # Hero Banner
         ctk.CTkLabel(container, text="🛡️", font=("Segoe UI", 48)).pack(pady=(10, 5))
-        ctk.CTkLabel(container, text="Witaj w KeyStead Manager!", font=FONT_TITLE_HERO, text_color=COLOR_TEXT_PRIMARY).pack(pady=(0, 4))
+        ctk.CTkLabel(container, text=_("Witaj w KeyStead Manager!"), font=FONT_TITLE_HERO, text_color=COLOR_TEXT_PRIMARY).pack(pady=(0, 4))
         ctk.CTkLabel(
             container,
-            text="Twój nowy, profesjonalny menedżer haseł chroniony kryptografią wojskowej klasy.",
+            text=_("Twój nowy, profesjonalny menedżer haseł chroniony kryptografią wojskowej klasy."),
             font=FONT_BODY,
             text_color=COLOR_TEXT_MUTED
         ).pack(pady=(0, 20))
@@ -231,9 +232,9 @@ class OnboardingWizard(ctk.CTkToplevel):
         features_box.pack(fill="x", pady=(0, 20), ipady=8, padx=5)
 
         feat_list = [
-            ("🔐", "Architektura Zero-Knowledge", "Twoje hasła są szyfrowane lokalnie (Argon2id + AES-256-GCM). Nikt poza Tobą nie ma do nich dostępu."),
-            ("🚨", "Aktywny Monitor Wycieków (HIBP)", "Baza wycieków danych sprawdzana metodą k-Anonymity – dowiesz się, czy Twoje konta są zagrożone."),
-            ("☁️", "Wieloplatformowe Kopie Zapasowe", "Zaszyfrowane kopie zapasowe mogą automatycznie trafiać na WebDAV/Nextcloud, Google Drive, OneDrive lub USB.")
+            ("🔐", _("Architektura Zero-Knowledge"), _("Twoje hasła są szyfrowane lokalnie (Argon2id + AES-256-GCM). Nikt poza Tobą nie ma do nich dostępu.")),
+            ("🚨", _("Aktywny Monitor Wycieków (HIBP)"), _("Baza wycieków danych sprawdzana metodą k-Anonymity – dowiesz się, czy Twoje konta są zagrożone.")),
+            ("☁️", _("Wieloplatformowe Kopie Zapasowe"), _("Zaszyfrowane kopie zapasowe mogą automatycznie trafiać na WebDAV/Nextcloud, Google Drive, OneDrive lub USB."))
         ]
 
         for icon, title, desc in feat_list:
@@ -246,7 +247,7 @@ class OnboardingWizard(ctk.CTkToplevel):
             ctk.CTkLabel(text_col, text=desc, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w", wraplength=480, justify="left").pack(anchor="w")
 
         # Pytanie o tryb startu
-        ctk.CTkLabel(container, text="Jak chcesz rozpocząć?", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", pady=(10, 8))
+        ctk.CTkLabel(container, text=_("Jak chcesz rozpocząć?"), font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", pady=(10, 8))
 
         self.mode_var = ctk.StringVar(value="new")
 
@@ -267,8 +268,8 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         col_a = ctk.CTkFrame(row_a, fg_color="transparent")
         col_a.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(col_a, text="🌟 Utwórz nowy sejf od podstaw (Zalecane)", font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(col_a, text="Stworzymy bezpieczną bazę haseł i ustawimy Twoje hasło główne.", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(col_a, text=_("🌟 Utwórz nowy sejf od podstaw (Zalecane)"), font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(col_a, text=_("Stworzymy bezpieczną bazę haseł i ustawimy Twoje hasło główne."), font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w").pack(anchor="w")
 
         # Wybór B: Import z innego menedżera
         card_b = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
@@ -287,8 +288,8 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         col_b = ctk.CTkFrame(row_b, fg_color="transparent")
         col_b.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(col_b, text="📥 Przechodzę z innego menedżera (Import danych)", font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(col_b, text="Zaimportuj hasła z Bitwarden, KeePass (.kdbx), 1Password, LastPass lub przeglądarki Chrome/Firefox.", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(col_b, text=_("📥 Przechodzę z innego menedżera (Import danych)"), font=FONT_BODY_BOLD, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(col_b, text=_("Zaimportuj hasła z Bitwarden, KeePass (.kdbx), 1Password, LastPass lub przeglądarki Chrome/Firefox."), font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, anchor="w").pack(anchor="w")
 
     def _on_mode_select(self):
         self.flow_mode = self.mode_var.get()
@@ -298,10 +299,10 @@ class OnboardingWizard(ctk.CTkToplevel):
         container = ctk.CTkScrollableFrame(self.step_content_frame, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=30, pady=20)
 
-        ctk.CTkLabel(container, text="Krok 2: Tworzenie i zabezpieczenie sejfu", font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(container, text=_("Krok 2: Tworzenie i zabezpieczenie sejfu"), font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(
             container,
-            text="Wybierz nazwę sejfu oraz silne hasło główne (Master Password).",
+            text=_("Wybierz nazwę sejfu oraz silne hasło główne (Master Password)."),
             font=FONT_BODY,
             text_color=COLOR_TEXT_MUTED
         ).pack(anchor="w", pady=(0, 15))
@@ -311,20 +312,20 @@ class OnboardingWizard(ctk.CTkToplevel):
         tip_box.pack(fill="x", pady=(0, 15), ipady=6, padx=2)
         ctk.CTkLabel(
             tip_box,
-            text="💡 PAMIĘTAJ: Hasło główne to jedyny klucz do Twoich danych.\nZ powodu szyfrowania Zero-Knowledge nie ma opcji 'Przypomnij hasło'!\nWybierz hasło, które zapamiętasz lub zapisz je w bezpiecznym miejscu offline.",
+            text=_("💡 PAMIĘTAJ: Hasło główne to jedyny klucz do Twoich danych.\nZ powodu szyfrowania Zero-Knowledge nie ma opcji 'Przypomnij hasło'!\nWybierz hasło, które zapamiętasz lub zapisz je w bezpiecznym miejscu offline."),
             font=FONT_SMALL,
             text_color=COLOR_TEXT_ACCENT,
             justify="left"
         ).pack(anchor="w", padx=12, pady=6)
 
         # Nazwa sejfu
-        ctk.CTkLabel(container, text="Nazwa sejfu:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        self.vault_name_input = ctk.CTkEntry(container, placeholder_text="Mój Główny Sejf")
+        ctk.CTkLabel(container, text=_("Nazwa sejfu:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.vault_name_input = ctk.CTkEntry(container, placeholder_text=_("Mój Główny Sejf"))
         self.vault_name_input.insert(0, self.vault_name)
         self.vault_name_input.pack(fill="x", pady=(0, 10))
 
         # Lokalizacja pliku
-        ctk.CTkLabel(container, text="Lokalizacja pliku bazy (.vault):", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        ctk.CTkLabel(container, text=_("Lokalizacja pliku bazy (.vault):"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
         file_box = ctk.CTkFrame(container, fg_color="transparent")
         file_box.pack(fill="x", pady=(0, 12))
 
@@ -332,20 +333,20 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.vault_path_input.insert(0, self.vault_file_path)
         self.vault_path_input.pack(side="left", expand=True, fill="x", padx=(0, 8))
 
-        ctk.CTkButton(file_box, text="Zmień...", width=80, fg_color=COLOR_CARD_DARK, command=self._browse_save_path).pack(side="left")
+        ctk.CTkButton(file_box, text=_("Zmień..."), width=80, fg_color=COLOR_CARD_DARK, command=self._browse_save_path).pack(side="left")
 
         # Hasło główne
-        ctk.CTkLabel(container, text="Hasło główne do sejfu (Master Password) *:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(4, 2))
+        ctk.CTkLabel(container, text=_("Hasło główne do sejfu (Master Password) *:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(4, 2))
         pwd_box = ctk.CTkFrame(container, fg_color="transparent")
         pwd_box.pack(fill="x", pady=(0, 4))
 
-        self.pwd1_input = ctk.CTkEntry(pwd_box, show="•", placeholder_text="Wpisz silne hasło główne...")
+        self.pwd1_input = ctk.CTkEntry(pwd_box, show="•", placeholder_text=_("Wpisz silne hasło główne..."))
         self.pwd1_input.pack(side="left", expand=True, fill="x", padx=(0, 8))
         self.pwd1_input.bind("<KeyRelease>", self._on_wizard_pwd_typed)
 
         ctk.CTkButton(
             pwd_box,
-            text="🎲 Podpowiedź frazy",
+            text=_("🎲 Podpowiedź frazy"),
             width=135,
             fg_color=COLOR_CARD_DARK,
             command=self._suggest_passphrase
@@ -359,15 +360,15 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.pwd_hint_lbl.pack(anchor="w", pady=(0, 8))
 
         # Powtórz hasło
-        ctk.CTkLabel(container, text="Powtórz hasło główne *:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        self.pwd2_input = ctk.CTkEntry(container, show="•", placeholder_text="Wpisz hasło ponownie...")
+        ctk.CTkLabel(container, text=_("Powtórz hasło główne *:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.pwd2_input = ctk.CTkEntry(container, show="•", placeholder_text=_("Wpisz hasło ponownie..."))
         self.pwd2_input.pack(fill="x", pady=(0, 15))
 
     def _browse_save_path(self):
         p = filedialog.asksaveasfilename(
-            title="Wybierz lokalizację pliku sejfu",
+            title=_("Wybierz lokalizację pliku sejfu"),
             defaultextension=".vault",
-            filetypes=[("Plik Sejfu", "*.vault")]
+            filetypes=[(_("Plik Sejfu"), "*.vault")]
         )
         if p:
             self.vault_path_input.delete(0, "end")
@@ -381,7 +382,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.pwd2_input.delete(0, "end")
         self.pwd2_input.insert(0, phrase)
         self._on_wizard_pwd_typed()
-        messagebox.showinfo("Wygenerowano zapamiętywalne hasło", f"Wstawiono silne hasło wielowyrazowe:\n\n{phrase}\n\nZapisz je w bezpiecznym miejscu!", parent=self)
+        messagebox.showinfo(_("Wygenerowano zapamiętywalne hasło"), _("Wstawiono silne hasło wielowyrazowe:\n\n{phrase}\n\nZapisz je w bezpiecznym miejscu!", phrase=phrase), parent=self)
 
     def _on_wizard_pwd_typed(self, event=None):
         pwd = self.pwd1_input.get()
@@ -394,7 +395,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.pwd_bar.set(eval_res["score"] / 4.0)
         self.pwd_bar.configure(progress_color=eval_res["color"])
         self.pwd_hint_lbl.configure(
-            text=f"Siła: {eval_res['label']} ({eval_res['entropy']} bitów entropii)",
+            text=_("Siła: {label} ({entropy} bitów entropii)", label=eval_res["label"], entropy=eval_res["entropy"]),
             text_color=eval_res["color"]
         )
 
@@ -403,10 +404,10 @@ class OnboardingWizard(ctk.CTkToplevel):
         container = ctk.CTkScrollableFrame(self.step_content_frame, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=30, pady=20)
 
-        ctk.CTkLabel(container, text="Krok 3: Ochrona i Kopie Zapasowe (Chmura / USB)", font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(container, text=_("Krok 3: Ochrona i Kopie Zapasowe (Chmura / USB)"), font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(
             container,
-            text="Kopie zapasowe są w pełni szyfrowane (AES-256-GCM). Możesz je bezpiecznie przechowywać w chmurze.",
+            text=_("Kopie zapasowe są w pełni szyfrowane (AES-256-GCM). Możesz je bezpiecznie przechowywać w chmurze."),
             font=FONT_BODY,
             text_color=COLOR_TEXT_MUTED
         ).pack(anchor="w", pady=(0, 15))
@@ -415,7 +416,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         self.auto_backup_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             container,
-            text="Automatycznie twórz kopie zapasowe przy każdym zapisie sejfu",
+            text=_("Automatycznie twórz kopie zapasowe przy każdym zapisie sejfu"),
             font=FONT_BODY_BOLD,
             variable=self.auto_backup_var
         ).pack(anchor="w", pady=(0, 12))
@@ -424,25 +425,25 @@ class OnboardingWizard(ctk.CTkToplevel):
         local_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
         local_card.pack(fill="x", pady=6, ipady=4)
 
-        ctk.CTkLabel(local_card, text="💾 Kopia lokalna / Dysk USB (Zalecane na start):", font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(6, 2))
+        ctk.CTkLabel(local_card, text=_("💾 Kopia lokalna / Dysk USB (Zalecane na start):"), font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(6, 2))
         l_row = ctk.CTkFrame(local_card, fg_color="transparent")
         l_row.pack(fill="x", padx=12, pady=(0, 8))
 
-        default_backup_dir = os.path.join(os.path.expanduser("~"), "Documents", "KopieSejfu")
-        self.local_backup_input = ctk.CTkEntry(l_row, placeholder_text="np. D:\\Kopie lub pendrive USB...")
+        default_backup_dir = os.path.join(os.path.expanduser("~"), "Documents", _("KopieSejfu"))
+        self.local_backup_input = ctk.CTkEntry(l_row, placeholder_text=_("np. D:\\Kopie lub pendrive USB..."))
         self.local_backup_input.insert(0, default_backup_dir)
         self.local_backup_input.pack(side="left", expand=True, fill="x", padx=(0, 8))
 
-        ctk.CTkButton(l_row, text="Wybierz...", width=80, fg_color=COLOR_PANEL_DARK, command=self._browse_backup_dir).pack(side="left")
+        ctk.CTkButton(l_row, text=_("Wybierz..."), width=80, fg_color=COLOR_PANEL_DARK, command=self._browse_backup_dir).pack(side="left")
 
         # Inne chmury info
         cloud_card = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
         cloud_card.pack(fill="x", pady=6, ipady=6)
 
-        ctk.CTkLabel(cloud_card, text="☁️ Integracja z Chmurą (WebDAV, Google Drive, OneDrive, Dropbox):", font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(6, 2))
+        ctk.CTkLabel(cloud_card, text=_("☁️ Integracja z Chmurą (WebDAV, Google Drive, OneDrive, Dropbox):"), font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(6, 2))
         ctk.CTkLabel(
             cloud_card,
-            text="Po wejściu do sejfu możesz w każdej chwili skonfigurować automatyczną wysyłkę do Nextcloud, Synology NAS, Dysku Google lub OneDrive klikając przycisk '☁️ Kopie i Chmura'.",
+            text=_("Po wejściu do sejfu możesz w każdej chwili skonfigurować automatyczną wysyłkę do Nextcloud, Synology NAS, Dysku Google lub OneDrive klikając przycisk '☁️ Kopie i Chmura'."),
             font=FONT_SMALL,
             text_color=COLOR_TEXT_MUTED,
             wraplength=480,
@@ -453,17 +454,22 @@ class OnboardingWizard(ctk.CTkToplevel):
         lock_box = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
         lock_box.pack(fill="x", pady=6, ipady=4)
 
-        ctk.CTkLabel(lock_box, text="🔒 Automatyczna blokada sejfu przy braku aktywności:", font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(6, 2))
+        ctk.CTkLabel(lock_box, text=_("🔒 Automatyczna blokada sejfu przy braku aktywności:"), font=FONT_BODY_BOLD).pack(anchor="w", padx=12, pady=(6, 2))
+        # Etykiety tłumaczone raz – wybór mapowany z powrotem na minuty po tej samej etykiecie
+        self.autolock_options = {
+            _("1 minuta"): 1, _("5 minut (Zalecane)"): 5, _("10 minut"): 10,
+            _("15 minut"): 15, _("30 minut"): 30, _("Nigdy"): 0,
+        }
         self.autolock_combo = ctk.CTkComboBox(
             lock_box,
-            values=["1 minuta", "5 minut (Zalecane)", "10 minut", "15 minut", "30 minut", "Nigdy"],
+            values=list(self.autolock_options),
             width=240
         )
-        self.autolock_combo.set("5 minut (Zalecane)")
+        self.autolock_combo.set(_("5 minut (Zalecane)"))
         self.autolock_combo.pack(anchor="w", padx=12, pady=(0, 8))
 
     def _browse_backup_dir(self):
-        d = filedialog.askdirectory(title="Wybierz katalog na kopie zapasowe")
+        d = filedialog.askdirectory(title=_("Wybierz katalog na kopie zapasowe"))
         if d:
             self.local_backup_input.delete(0, "end")
             self.local_backup_input.insert(0, d)
@@ -474,10 +480,10 @@ class OnboardingWizard(ctk.CTkToplevel):
         container.pack(fill="both", expand=True, padx=30, pady=25)
 
         ctk.CTkLabel(container, text="🎉", font=("Segoe UI", 48)).pack(pady=(10, 5))
-        ctk.CTkLabel(container, text="Gratulacje! Twój sejf jest gotowy.", font=FONT_TITLE_HERO, text_color=COLOR_SUCCESS).pack(pady=(0, 4))
+        ctk.CTkLabel(container, text=_("Gratulacje! Twój sejf jest gotowy."), font=FONT_TITLE_HERO, text_color=COLOR_SUCCESS).pack(pady=(0, 4))
         ctk.CTkLabel(
             container,
-            text="Wszystkie parametry zostały skonfigurowane, a baza została pomyślnie zaszyfrowana.",
+            text=_("Wszystkie parametry zostały skonfigurowane, a baza została pomyślnie zaszyfrowana."),
             font=FONT_BODY,
             text_color=COLOR_TEXT_MUTED
         ).pack(pady=(0, 20))
@@ -485,7 +491,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         if self.flow_mode == "import":
             ctk.CTkLabel(
                 container,
-                text="📥 Po otwarciu sejfu automatycznie uruchomi się Kreator Importu.",
+                text=_("📥 Po otwarciu sejfu automatycznie uruchomi się Kreator Importu."),
                 font=FONT_BODY_BOLD,
                 text_color=COLOR_TEXT_ACCENT
             ).pack(pady=(0, 15))
@@ -493,13 +499,13 @@ class OnboardingWizard(ctk.CTkToplevel):
         summary_box = ctk.CTkFrame(container, fg_color=COLOR_CARD_DARK, corner_radius=10)
         summary_box.pack(fill="x", pady=(0, 20), ipady=8, padx=5)
 
-        ctk.CTkLabel(summary_box, text="📌 Szybkie wskazówki na start:", font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 6))
+        ctk.CTkLabel(summary_box, text=_("📌 Szybkie wskazówki na start:"), font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=15, pady=(8, 6))
 
         tips = [
-            ("➕ Dodawanie wpisów:", "Kliknij '+ Nowy Wpis' w górnym menu, aby zapisać login, hasło, stronę i klucz 2FA."),
-            ("📋 Bezpieczny schowek:", "Kopiowanie hasła automatycznie usuwa je ze schowka systemowego po 30 sekundach."),
-            ("🛡️ Audyt Wycieków:", "Uruchamiaj regularnie przycisk '🛡️ Audyt Wycieków', aby dowiedzieć się czy Twoje hasła nie pojawiły się w publicznych bazach."),
-            ("📥 Import z innych menedżerów:", "W menu '📥 Import' możesz w każdej chwili przenieść całą bazę z Bitwarden, KeePass, 1Password lub Chrome.")
+            (_("➕ Dodawanie wpisów:"), _("Kliknij '+ Nowy Wpis' w górnym menu, aby zapisać login, hasło, stronę i klucz 2FA.")),
+            (_("📋 Bezpieczny schowek:"), _("Kopiowanie hasła automatycznie usuwa je ze schowka systemowego po 30 sekundach.")),
+            (_("🛡️ Audyt Wycieków:"), _("Uruchamiaj regularnie przycisk '🛡️ Audyt Wycieków', aby dowiedzieć się czy Twoje hasła nie pojawiły się w publicznych bazach.")),
+            (_("📥 Import z innych menedżerów:"), _("W menu '📥 Import' możesz w każdej chwili przenieść całą bazę z Bitwarden, KeePass, 1Password lub Chrome."))
         ]
 
         for k, v in tips:
@@ -519,13 +525,13 @@ class OnboardingWizard(ctk.CTkToplevel):
 
         elif self.current_step == 2:
             # Weryfikacja kroku 2
-            v_name = self.vault_name_input.get().strip() or "Mój Główny Sejf"
+            v_name = self.vault_name_input.get().strip() or _("Mój Główny Sejf")
             v_path = self.vault_path_input.get().strip()
             p1 = self.pwd1_input.get()
             p2 = self.pwd2_input.get()
 
             if not v_path:
-                messagebox.showerror("Błąd", "Podaj ścieżkę do pliku sejfu.", parent=self)
+                messagebox.showerror(_("Błąd"), _("Podaj ścieżkę do pliku sejfu."), parent=self)
                 return
 
             if not v_path.lower().endswith(".vault"):
@@ -533,19 +539,19 @@ class OnboardingWizard(ctk.CTkToplevel):
 
             allowed, policy_msg = check_master_password(p1)
             if not allowed:
-                messagebox.showerror("Zbyt słabe hasło główne", policy_msg, parent=self)
+                messagebox.showerror(_("Zbyt słabe hasło główne"), policy_msg, parent=self)
                 return
 
             if p1 != p2:
-                messagebox.showerror("Błąd", "Wprowadzone hasła różnią się od siebie.", parent=self)
+                messagebox.showerror(_("Błąd"), _("Wprowadzone hasła różnią się od siebie."), parent=self)
                 return
 
-            if policy_msg and not messagebox.askyesno("Średnio silne hasło główne", policy_msg + "\n\nUżyć mimo to?", icon="warning", parent=self):
+            if policy_msg and not messagebox.askyesno(_("Średnio silne hasło główne"), policy_msg + "\n\n" + _("Użyć mimo to?"), icon="warning", parent=self):
                 return
 
             if os.path.exists(v_path) and not messagebox.askyesno(
-                "Plik już istnieje",
-                f"Plik {v_path} już istnieje.\n\nNadpisanie go NIEODWRACALNIE usunie zapisany w nim sejf. Kontynuować?",
+                _("Plik już istnieje"),
+                _("Plik {path} już istnieje.\n\nNadpisanie go NIEODWRACALNIE usunie zapisany w nim sejf. Kontynuować?", path=v_path),
                 icon="warning",
                 parent=self
             ):
@@ -564,17 +570,7 @@ class OnboardingWizard(ctk.CTkToplevel):
             # Zastosuj ustawienia kopii i autolock
             backup_dir = self.local_backup_input.get().strip()
             lock_choice = self.autolock_combo.get()
-            lock_min = 5
-            if "1 min" in lock_choice:
-                lock_min = 1
-            elif "10 min" in lock_choice:
-                lock_min = 10
-            elif "15 min" in lock_choice:
-                lock_min = 15
-            elif "30 min" in lock_choice:
-                lock_min = 30
-            elif "Nigdy" in lock_choice:
-                lock_min = 0
+            lock_min = self.autolock_options.get(lock_choice, 5)
 
             self.created_vault.settings["auto_lock_minutes"] = lock_min
             self.created_vault.settings["auto_backup_on_save"] = self.auto_backup_var.get()
@@ -589,7 +585,7 @@ class OnboardingWizard(ctk.CTkToplevel):
                 save_vault(self.created_vault, self.vault_file_path, self.master_password)
                 mark_first_run_completed()
             except Exception as e:
-                messagebox.showerror("Błąd zapisu sejfu", f"Nie udało się zapisać sejfu na dysku: {str(e)}", parent=self)
+                messagebox.showerror(_("Błąd zapisu sejfu"), _("Nie udało się zapisać sejfu na dysku: {error}", error=e), parent=self)
                 return
 
             self._show_step(4)

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any, Callable
 import requests
 
+from core.i18n import _
 from core.vault import Vault, VaultEntry
 from core.generator import evaluate_password_strength
 
@@ -114,7 +115,7 @@ class AuditReport:
     def __init__(self):
         self.total_entries: int = 0
         self.score: int = 100
-        self.rating_label: str = "Doskonały"
+        self.rating_label: str = _("Doskonały")
         self.rating_color: str = "#10b981"
         self.issues: List[AuditIssue] = []
         self.hibp_failures: int = 0  # Liczba haseł, których nie udało się sprawdzić w HIBP
@@ -143,7 +144,7 @@ class AuditReport:
         """Wylicza ogólny wynik bezpieczeństwa sejfu w skali 0-100."""
         if self.total_entries == 0:
             self.score = 100
-            self.rating_label = "Pusty sejf"
+            self.rating_label = _("Pusty sejf")
             self.rating_color = "#9ca3af"
             return
 
@@ -158,16 +159,16 @@ class AuditReport:
         self.score = max(0, min(100, 100 - penalty))
 
         if self.score >= 85:
-            self.rating_label = "Doskonały (Wysoki poziom ochrony)"
+            self.rating_label = _("Doskonały (Wysoki poziom ochrony)")
             self.rating_color = "#10b981"
         elif self.score >= 65:
-            self.rating_label = "Dobry (Zalecane drobne poprawki)"
+            self.rating_label = _("Dobry (Zalecane drobne poprawki)")
             self.rating_color = "#f59e0b"
         elif self.score >= 40:
-            self.rating_label = "Średni (Wykryto zagrożenia)"
+            self.rating_label = _("Średni (Wykryto zagrożenia)")
             self.rating_color = "#f97316"
         else:
-            self.rating_label = "Krytyczny (Pilnie zmień wyciekłe hasła!)"
+            self.rating_label = _("Krytyczny (Pilnie zmień wyciekłe hasła!)")
             self.rating_color = "#ef4444"
 
 
@@ -237,8 +238,9 @@ def run_vault_audit(
                     entry=entry,
                     issue_type="breached",
                     severity="critical",
-                    title="Hasło znalezione w wyciekach danych!",
-                    description=f"To hasło pojawiło się w znanych wyciekach danych {leak_count:,} razy. Hakerzy posiadają je w swoich słownikach ataku.",
+                    title=_("Hasło znalezione w wyciekach danych!"),
+                    description=_("To hasło pojawiło się w znanych wyciekach danych {count:,} razy. Hakerzy posiadają je w swoich słownikach ataku.",
+                                  count=leak_count),
                     leak_count=leak_count
                 ))
 
@@ -250,26 +252,27 @@ def run_vault_audit(
                     entry=entry,
                     issue_type="weak",
                     severity="high" if eval_res["score"] <= 1 else "medium",
-                    title=f"Słabe hasło ({eval_res['label']})",
-                    description=f"Hasło ma niską entropię ({eval_res['entropy']} bitów). {', '.join(eval_res['feedback'])}"
+                    title=_("Słabe hasło ({label})", label=eval_res['label']),
+                    description=_("Hasło ma niską entropię ({bits} bitów). {feedback}", bits=eval_res['entropy'],
+                                  feedback=', '.join(eval_res['feedback']))
                 ))
-        elif entry.category == "Loginy":
+        elif entry.category == "Loginy":  # i18n: data
             report.issues.append(AuditIssue(
                 entry=entry,
                 issue_type="weak",
                 severity="critical",
-                title="Brak hasła we wpisie logowania",
-                description="Ten wpis nie posiada zapisanego hasła."
+                title=_("Brak hasła we wpisie logowania"),
+                description=_("Ten wpis nie posiada zapisanego hasła.")
             ))
 
         # 2.3 Brak 2FA / TOTP (dla kategorii Loginy)
-        if entry.category in ["Loginy", "Konta internetowe"] and not entry.totp_secret:
+        if entry.category in ["Loginy", "Konta internetowe"] and not entry.totp_secret:  # i18n: data
             report.issues.append(AuditIssue(
                 entry=entry,
                 issue_type="missing_totp",
                 severity="low",
-                title="Brak skonfigurowanego 2FA (TOTP)",
-                description="Dla tego konta nie skonfigurowano jednorazowych kodów dwuskładnikowych."
+                title=_("Brak skonfigurowanego 2FA (TOTP)"),
+                description=_("Dla tego konta nie skonfigurowano jednorazowych kodów dwuskładnikowych.")
             ))
 
         # 2.4 Stare hasła (> 180 dni od ostatniej zmiany hasła)
@@ -282,8 +285,9 @@ def run_vault_audit(
                         entry=entry,
                         issue_type="stale",
                         severity="low",
-                        title=f"Hasło niezmieniane od {age_days} dni",
-                        description=f"Ostatnia zmiana hasła miała miejsce {age_days} dni temu ({changed_at.date().isoformat()})."
+                        title=_("Hasło niezmieniane od {days} dni", days=age_days),
+                        description=_("Ostatnia zmiana hasła miała miejsce {days} dni temu ({date}).", days=age_days,
+                                      date=changed_at.date().isoformat())
                     ))
 
     # 3. Dodanie problemów z powtórzonymi hasłami
@@ -295,8 +299,8 @@ def run_vault_audit(
                     entry=entry,
                     issue_type="reused",
                     severity="high",
-                    title=f"Hasło używane na {len(matched_entries)} różnych kontach!",
-                    description=f"Identyczne hasło jest współdzielone z kontami: {', '.join(other_titles)}.",
+                    title=_("Hasło używane na {n} różnych kontach!", n=len(matched_entries)),
+                    description=_("Identyczne hasło jest współdzielone z kontami: {accounts}.", accounts=', '.join(other_titles)),
                     shared_with=other_titles
                 ))
 

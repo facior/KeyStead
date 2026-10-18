@@ -8,6 +8,8 @@ Inne systemy: zapis w pliku z uprawnieniami tylko dla właściciela (oznaczony p
 import base64
 import sys
 
+from core.i18n import _
+
 _DPAPI_PREFIX = "dpapi:"
 _PLAIN_PREFIX = "plain:"
 
@@ -39,7 +41,7 @@ def _dpapi(data: bytes, protect: bool) -> bytes:
         ok = fn(ctypes.byref(blob_in), None, ctypes.byref(entropy), None, None,
                 CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out))
     if not ok:
-        raise OSError(ctypes.get_last_error(), "DPAPI: operacja nie powiodła się")
+        raise OSError(ctypes.get_last_error(), _("DPAPI: operacja nie powiodła się"))
     try:
         return ctypes.string_at(blob_out.pbData, blob_out.cbData)
     finally:

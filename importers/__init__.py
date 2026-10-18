@@ -5,6 +5,7 @@ Automatycznie wykrywa format pliku lub pozwala na ręczny wybór parsera.
 
 import os
 from typing import Dict, List, Optional
+from core.i18n import _
 from core.vault import Vault, VaultEntry
 from importers.base import BaseImporter, ImportResult, ImportItem
 from importers.bitwarden import BitwardenImporter
@@ -70,8 +71,8 @@ def run_import(
         importer = detect_importer(file_path)
 
     if not importer:
-        res = ImportResult("Nieznany format")
-        res.add_error("Nie udało się rozpoznać formatu pliku ani dopasować importera.")
+        res = ImportResult(_("Nieznany format"))
+        res.add_error(_("Nie udało się rozpoznać formatu pliku ani dopasować importera."))
         return res
 
     return importer.parse(file_path, password=password, keyfile_path=keyfile_path)

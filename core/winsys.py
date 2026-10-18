@@ -10,6 +10,8 @@ import time
 from ctypes import wintypes
 from typing import Callable, Dict, Optional, Tuple
 
+from core.i18n import _
+
 IS_WINDOWS = sys.platform == "win32"
 
 if IS_WINDOWS:
@@ -142,9 +144,9 @@ def parse_hotkey(text: str) -> Tuple[int, int]:
         elif part.startswith("F") and part[1:].isdigit() and 1 <= int(part[1:]) <= 24:
             key = 0x70 + int(part[1:]) - 1
         else:
-            raise ValueError(f"Nieznany klawisz: {part}")
+            raise ValueError(_("Nieznany klawisz: {key}", key=part))
     if not key or not mods:
-        raise ValueError("Skrót musi zawierać klawisz modyfikujący (Ctrl/Alt/Shift/Win) i zwykły klawisz.")
+        raise ValueError(_("Skrót musi zawierać klawisz modyfikujący (Ctrl/Alt/Shift/Win) i zwykły klawisz."))
     return mods, key
 
 

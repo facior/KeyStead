@@ -8,14 +8,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
+from core.i18n import _
+
 
 DEFAULT_CATEGORIES = [
-    "Wszystkie",
-    "Loginy",
-    "Karty płatnicze",
-    "Bezpieczne notatki",
-    "Serwery / Wi-Fi",
-    "Tożsamości"
+    "Wszystkie",  # i18n: data
+    "Loginy",  # i18n: data
+    "Karty płatnicze",  # i18n: data
+    "Bezpieczne notatki",  # i18n: data
+    "Serwery / Wi-Fi",  # i18n: data
+    "Tożsamości"  # i18n: data
 ]
 
 
@@ -107,7 +109,7 @@ class VaultEntry:
     def __init__(
         self,
         title: str,
-        category: str = "Loginy",
+        category: str = "Loginy",  # i18n: data
         username: str = "",
         password: str = "",
         url: str = "",
@@ -124,8 +126,8 @@ class VaultEntry:
     ):
         now_iso = datetime.now(timezone.utc).isoformat()
         self.id = as_text(entry_id, 64) or str(uuid.uuid4())
-        self.title = as_text(title, 500) or "Bez tytułu"
-        self.category = as_text(category, 200) or "Loginy"
+        self.title = as_text(title, 500) or _("Bez tytułu")
+        self.category = as_text(category, 200) or "Loginy"  # i18n: data
         self.username = as_text(username, 1000)
         self.password = as_text(password, 10_000)
         self.url = as_text(url, 4000)
@@ -210,8 +212,8 @@ class VaultEntry:
     def from_dict(cls, data: Dict[str, Any]) -> "VaultEntry":
         return cls(
             entry_id=data.get("id"),
-            title=data.get("title", "Bez nazwy"),
-            category=data.get("category", "Loginy"),
+            title=data.get("title", _("Bez nazwy")),
+            category=data.get("category", "Loginy"),  # i18n: data
             username=data.get("username", ""),
             password=data.get("password", ""),
             url=data.get("url", ""),
@@ -230,7 +232,7 @@ class VaultEntry:
 class Vault:
     def __init__(
         self,
-        name: str = "Główny Sejf",
+        name: str = "Główny Sejf",  # i18n: data
         categories: Optional[List[str]] = None,
         settings: Optional[Dict[str, Any]] = None
     ):
@@ -306,7 +308,7 @@ class Vault:
             if favorite_only and not entry.favorite:
                 continue
 
-            if category and category != "Wszystkie" and entry.category != category:
+            if category and category != "Wszystkie" and entry.category != category:  # i18n: data
                 continue
 
             if tag and tag not in entry.tags:
@@ -347,7 +349,7 @@ class Vault:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Vault":
         vault = cls(
-            name=data.get("name", "Mój Sejf"),
+            name=data.get("name", "Mój Sejf"),  # i18n: data
             categories=data.get("categories"),
             settings=data.get("settings")
         )

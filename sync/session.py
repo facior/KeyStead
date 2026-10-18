@@ -22,6 +22,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from core.i18n import _
 from core.crypto import CryptoError, InvalidPasswordOrCorruptDataError, compute_sha256, seal
 from core.storage import vault_from_blob, write_encrypted_file
 from core.vault import Vault
@@ -111,7 +112,7 @@ class SyncSession:
         self.max_revision = 0  # najwyższy licznik zapisów sejfu widziany na tym urządzeniu (ochrona przed cofnięciem)
         self._rejected_version: Optional[int] = None  # wersja serwera odrzucona jako podsunięta starsza treść
         self.state = SYNCING
-        self.message = "Łączenie z serwerem..."
+        self.message = _("Łączenie z serwerem...")
 
     # ------------------------------------------------------------ kolejka
     def _submit(self, fn, *args) -> Future:
@@ -177,9 +178,9 @@ class SyncSession:
         """Czy pobrana zawartość jest STARSZA niż już widziana (serwer podsunął wcześniejszą wersję)."""
         return self.max_revision > 0 and int(getattr(vault, "revision", 0) or 0) < self.max_revision
 
-    ROLLBACK_MESSAGE = ("Serwer przesłał STARSZĄ zawartość sejfu niż ta, którą to urządzenie już widziało – nie została "
-                        "wczytana. Jeśli administrator na Twoją prośbę przywrócił poprzednią wersję, wybierz w panelu "
-                        "synchronizacji „Pobierz wersję z serwera”. W przeciwnym razie zgłoś to administratorowi.")
+    ROLLBACK_MESSAGE = _("Serwer przesłał STARSZĄ zawartość sejfu niż ta, którą to urządzenie już widziało – nie została "
+                         "wczytana. Jeśli administrator na Twoją prośbę przywrócił poprzednią wersję, wybierz w panelu "
+                         "synchronizacji „Pobierz wersję z serwera”. W przeciwnym razie zgłoś to administratorowi.")
 
     def report_due(self, interval_hours: int = 24) -> bool:
         if not (self.policy or {}).get("security_report"):
@@ -214,8 +215,8 @@ class SyncSession:
         max_hours = int((self.policy or {}).get("max_offline_hours") or 0)
         if max_hours and self.last_contact and time.time() - float(self.last_contact) > max_hours * 3600:
             raise OfflineExpiredError(
-                f"Polityka firmy pozwala pracować bez połączenia z serwerem najwyżej {max_hours} h. "
-                "Połącz się z siecią firmy / VPN, aby odblokować sejf.")
+                _("Polityka firmy pozwala pracować bez połączenia z serwerem najwyżej {hours} h. "
+                  "Połącz się z siecią firmy / VPN, aby odblokować sejf.", hours=max_hours))
 
     def add_listener(self, callback: Callable[[SyncStatus], None]) -> None:
         self._listeners.append(callback)
@@ -233,12 +234,12 @@ class SyncSession:
             except Exception:
                 pass
 
-    def _mark_synced(self, version: int, message: str = "Zsynchronizowano") -> None:
+    def _mark_synced(self, version: int, message: Optional[str] = None) -> None:
         self.base_version = version
         self.pending = False
         self.last_sync = time.time()
         self._save_state()
-        self._set(SYNCED, message)
+        self._set(SYNCED, message or _("Zsynchronizowano"))
 
     def _decrypt(self, blob: bytes) -> Vault:
         return vault_from_blob(blob, self._password, self._keyfile)
@@ -249,7 +250,7 @@ class SyncSession:
 
     @property
     def unsent_copy_path(self) -> str:
-        return self.cache_path[:-len(".vault")] + " - niewysłane zmiany.vault"
+        return self.cache_path[:-len(".vault")] + " - niewysłane zmiany.vault"  # i18n: data
 
     def _keep_unsent_copy(self) -> None:
         """Lokalna kopia z niewysłanymi zmianami, której nie da się otworzyć bieżącym hasłem – zostaje jako osobny plik."""
@@ -276,7 +277,7 @@ class SyncSession:
         self.revoked = True
         self.pending = False
         self.wipe_local_data()
-        self._set(REVOKED, reason or "Administrator odebrał temu urządzeniu dostęp do sejfu.")
+        self._set(REVOKED, reason or _("Administrator odebrał temu urządzeniu dostęp do sejfu."))
 
     # ------------------------------------------------------------ otwieranie
     def open(self, password: str, keyfile: Optional[bytes] = None) -> Vault:
@@ -299,10 +300,10 @@ class SyncSession:
         except NetworkError as e:
             self._load_state()
             if not os.path.exists(self.cache_path):
-                raise NetworkError(f"{e}\nBrak lokalnej kopii – pierwsze połączenie wymaga dostępu do serwera.")
+                raise NetworkError(_("{error}\nBrak lokalnej kopii – pierwsze połączenie wymaga dostępu do serwera.", error=e))
             self._check_offline_allowed()
             vault = self._decrypt(self._read_cache())
-            self._set(OFFLINE, "Serwer niedostępny – pracujesz na lokalnej kopii")
+            self._set(OFFLINE, _("Serwer niedostępny – pracujesz na lokalnej kopii"))
             return vault
 
         self.profile.server_id = info.get("server_id", "")
@@ -310,7 +311,7 @@ class SyncSession:
         self._load_state()
         self._apply_server_info(info)
         if not info.get("exists"):
-            raise EmptyServerError("Na serwerze nie ma jeszcze sejfu.")
+            raise EmptyServerError(_("Na serwerze nie ma jeszcze sejfu."))
 
         remote = info["meta"]
         self.remote_meta = remote
@@ -324,7 +325,7 @@ class SyncSession:
             else:
                 self.last_sync = time.time()
                 self._save_state()
-                self._set(SYNCED, "Zsynchronizowano")
+                self._set(SYNCED, _("Zsynchronizowano"))
             return vault
 
         if has_cache and self.pending and remote["version"] > self.base_version:
@@ -336,13 +337,15 @@ class SyncSession:
                 self._keep_unsent_copy()
                 vault = None
             if vault is not None:
-                self._set(CONFLICT, f"Sejf zmieniono na urządzeniu „{remote.get('updated_by')}”, a tu są niewysłane zmiany")
+                self._set(CONFLICT, _("Sejf zmieniono na urządzeniu „{device}”, a tu są niewysłane zmiany",
+                                       device=remote.get('updated_by')))
                 return vault
 
         if has_cache and remote["version"] < self.base_version:
             vault = self._decrypt(self._read_cache())
-            self._set(ERROR, f"Serwer ma starszą wersję (v{remote['version']}) niż ostatnio widziana (v{self.base_version}). "
-                             "Możliwe przywrócenie serwera z kopii – zdecyduj w panelu synchronizacji.")
+            self._set(ERROR, _("Serwer ma starszą wersję (v{remote}) niż ostatnio widziana (v{local}). "
+                               "Możliwe przywrócenie serwera z kopii – zdecyduj w panelu synchronizacji.",
+                               remote=remote['version'], local=self.base_version))
             return vault
 
         blob, version = self.client.download()
@@ -370,7 +373,7 @@ class SyncSession:
         meta = self.client.upload(encrypted_blob, 0)
         write_encrypted_file(self.cache_path, encrypted_blob)
         self.remote_meta = meta
-        self._mark_synced(meta["version"], "Sejf wysłany na serwer")
+        self._mark_synced(meta["version"], _("Sejf wysłany na serwer"))
         return meta
 
     # ------------------------------------------------------------ zapis i wysyłanie
@@ -385,7 +388,7 @@ class SyncSession:
         if revision:
             self._seen_revision(revision)
         if self.state not in (CONFLICT, OFFLINE, REVOKED):
-            self._set(PENDING, "Zapisywanie zmian...")
+            self._set(PENDING, _("Zapisywanie zmian..."))
         return self._submit(self._save_and_push, encrypted_blob)
 
     def _save_and_push(self, encrypted_blob: bytes) -> None:
@@ -412,7 +415,7 @@ class SyncSession:
         if not self.pending or self.state in (CONFLICT, REVOKED):
             return
         blob = self._read_cache()
-        self._set(SYNCING, "Wysyłanie zmian na serwer...")
+        self._set(SYNCING, _("Wysyłanie zmian na serwer..."))
         try:
             meta = self.client.upload(blob, self.base_version)
         except AuthError as e:
@@ -420,16 +423,17 @@ class SyncSession:
             return
         except ConflictError as e:
             self.remote_meta = e.remote_meta
-            self._set(CONFLICT, f"Sejf zmieniono na urządzeniu „{e.remote_meta.get('updated_by', '?')}” – wybierz, którą wersję zachować")
+            self._set(CONFLICT, _("Sejf zmieniono na urządzeniu „{device}” – wybierz, którą wersję zachować",
+                                   device=e.remote_meta.get('updated_by', '?')))
             return
         except NetworkError:
-            self._set(OFFLINE, "Serwer niedostępny – zmiany zapisane lokalnie, zostaną wysłane później")
+            self._set(OFFLINE, _("Serwer niedostępny – zmiany zapisane lokalnie, zostaną wysłane później"))
             return
         except SyncError as e:
             self._set(ERROR, str(e))
             return
         self.remote_meta = meta
-        self._mark_synced(meta["version"], "Zmiany wysłane na serwer")
+        self._mark_synced(meta["version"], _("Zmiany wysłane na serwer"))
 
     # ------------------------------------------------------------ sprawdzanie aktualizacji
     def poll(self) -> Optional[RemoteUpdate]:
@@ -449,8 +453,8 @@ class SyncSession:
             return None
         except NetworkError:
             if self.state != CONFLICT:
-                self._set(OFFLINE, "Serwer niedostępny – zmiany są zapisywane lokalnie" if self.pending
-                          else "Serwer niedostępny – pracujesz na lokalnej kopii")
+                self._set(OFFLINE, _("Serwer niedostępny – zmiany są zapisywane lokalnie") if self.pending
+                          else _("Serwer niedostępny – pracujesz na lokalnej kopii"))
             return None
         except SyncError as e:
             self._set(ERROR, str(e))
@@ -466,35 +470,36 @@ class SyncSession:
             self._push()
             return None
         if not remote:
-            self._set(ERROR, "Sejf zniknął z serwera – wyślij go ponownie z panelu synchronizacji.")
+            self._set(ERROR, _("Sejf zniknął z serwera – wyślij go ponownie z panelu synchronizacji."))
             return None
         if remote["version"] < self.base_version:
-            self._set(ERROR, f"Serwer ma starszą wersję (v{remote['version']}) niż ostatnio widziana (v{self.base_version}).")
+            self._set(ERROR, _("Serwer ma starszą wersję (v{remote}) niż ostatnio widziana (v{local}).",
+                               remote=remote['version'], local=self.base_version))
             return None
         if remote["version"] == self.base_version:
             self.last_sync = time.time()
-            self._set(SYNCED, "Zsynchronizowano")
+            self._set(SYNCED, _("Zsynchronizowano"))
             return None
         if remote["version"] == self._rejected_version:
             self._set(ERROR, self.ROLLBACK_MESSAGE)  # ta sama podsunięta wersja – bez ponownego pobierania
             return None
 
-        self._set(SYNCING, "Pobieranie zmian z serwera...")
+        self._set(SYNCING, _("Pobieranie zmian z serwera..."))
         try:
             blob, version = self.client.download()
             vault = self._decrypt(blob)
         except NetworkError:
-            self._set(OFFLINE, "Serwer niedostępny")
+            self._set(OFFLINE, _("Serwer niedostępny"))
             return None
         except CryptoError:
-            self._set(ERROR, "Nie można odszyfrować nowej wersji – hasło główne zostało zmienione na innym "
-                             "urządzeniu. Zablokuj sejf i odblokuj go nowym hasłem.")
+            self._set(ERROR, _("Nie można odszyfrować nowej wersji – hasło główne zostało zmienione na innym "
+                               "urządzeniu. Zablokuj sejf i odblokuj go nowym hasłem."))
             return None
         if self._is_rollback(vault):
             self._rejected_version = version
             self._set(ERROR, self.ROLLBACK_MESSAGE)
             return None
-        self._set(SYNCING, "Wczytywanie zmian...")
+        self._set(SYNCING, _("Wczytywanie zmian..."))
         return RemoteUpdate(vault, blob, version, remote.get("updated_by", "?"))
 
     def adopt(self, update: RemoteUpdate) -> Future:
@@ -507,7 +512,7 @@ class SyncSession:
             return
         write_encrypted_file(self.cache_path, update.blob)
         self._seen_revision(update.vault.revision)
-        self._mark_synced(update.version, f"Pobrano zmiany z urządzenia „{update.updated_by}”")
+        self._mark_synced(update.version, _("Pobrano zmiany z urządzenia „{device}”", device=update.updated_by))
 
     # ------------------------------------------------------------ konflikty i historia
     def resolve_use_server(self) -> Vault:
@@ -520,7 +525,7 @@ class SyncSession:
         vault = self._decrypt(blob)
         write_encrypted_file(self.cache_path, blob)
         self.max_revision = int(vault.revision or 0)
-        self._mark_synced(version, "Pobrano wersję z serwera")
+        self._mark_synced(version, _("Pobrano wersję z serwera"))
         return vault
 
     def resolve_keep_local(self) -> None:
@@ -532,7 +537,7 @@ class SyncSession:
         base = info["meta"]["version"] if info.get("meta") else 0
         meta = self.client.upload(self._read_cache(), base)
         self.remote_meta = meta
-        self._mark_synced(meta["version"], "Twoja wersja została wysłana na serwer")
+        self._mark_synced(meta["version"], _("Twoja wersja została wysłana na serwer"))
 
     def history(self) -> List[Dict[str, Any]]:
         return self.client.history()
@@ -542,7 +547,7 @@ class SyncSession:
         return self._run(self._restore_version, version)
 
     def _restore_version(self, version: int) -> Vault:
-        blob, _ = self.client.download(version)
+        blob, __ = self.client.download(version)
         vault = self._decrypt(blob)
         # Przywrócona treść dostaje nowy, najwyższy licznik – inne urządzenia przyjmą ją jako zwykłą zmianę
         vault.revision = self.next_revision(vault.revision)
@@ -553,7 +558,8 @@ class SyncSession:
         meta = self.client.upload(blob, base)
         write_encrypted_file(self.cache_path, blob)
         self.remote_meta = meta
-        self._mark_synced(meta["version"], f"Przywrócono wersję v{version} (jako v{meta['version']})")
+        self._mark_synced(meta["version"], _("Przywrócono wersję v{version} (jako v{new})", version=version,
+                                                new=meta['version']))
         return vault
 
     def update_credentials(self, password: str, keyfile: Optional[bytes]) -> None:

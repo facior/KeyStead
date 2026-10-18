@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from core.i18n import _
 from core.paths import APP_DIR
 
 KEY_NAME = "KeyStead Manager"
@@ -55,7 +56,7 @@ class WindowsHelloProvider:
         except QuickUnlockError:
             raise
         except Exception as e:
-            raise QuickUnlockError(f"Windows Hello zgłosiło błąd: {e}")
+            raise QuickUnlockError(_("Windows Hello zgłosiło błąd: {error}", error=e))
 
     async def _sign(self, challenge: bytes, create: bool) -> bytes:
         from winrt.windows.security.credentials import (KeyCredentialCreationOption, KeyCredentialManager,
@@ -82,12 +83,12 @@ def _check_status(status, enum) -> None:
     if status == enum.SUCCESS:
         return
     messages = {
-        enum.USER_CANCELED: "Anulowano potwierdzenie Windows Hello.",
-        enum.USER_PREFERS_PASSWORD: "Wybrano logowanie hasłem.",
-        enum.NOT_FOUND: "Klucz Windows Hello nie istnieje – włącz szybkie odblokowanie ponownie.",
-        enum.SECURITY_DEVICE_LOCKED: "Windows Hello jest tymczasowo zablokowane (zbyt wiele prób). Użyj hasła.",
+        enum.USER_CANCELED: _("Anulowano potwierdzenie Windows Hello."),
+        enum.USER_PREFERS_PASSWORD: _("Wybrano logowanie hasłem."),
+        enum.NOT_FOUND: _("Klucz Windows Hello nie istnieje – włącz szybkie odblokowanie ponownie."),
+        enum.SECURITY_DEVICE_LOCKED: _("Windows Hello jest tymczasowo zablokowane (zbyt wiele prób). Użyj hasła."),
     }
-    raise QuickUnlockError(messages.get(status, "Windows Hello jest niedostępne – użyj hasła głównego."))
+    raise QuickUnlockError(messages.get(status, _("Windows Hello jest niedostępne – użyj hasła głównego.")))
 
 
 # --------------------------------------------------------------------- magazyn
@@ -149,18 +150,18 @@ class QuickUnlockStore:
             nonce = base64.b64decode(record["nonce"])
             ciphertext = base64.b64decode(record["ciphertext"])
         except (OSError, ValueError, KeyError):
-            raise QuickUnlockError("Brak zapisanego szybkiego odblokowania dla tego sejfu.")
+            raise QuickUnlockError(_("Brak zapisanego szybkiego odblokowania dla tego sejfu."))
         key = _kdf(self.provider.sign(challenge), challenge)
         try:
             secret = json.loads(AESGCM(key).decrypt(nonce, ciphertext, target.encode()).decode("utf-8"))
         except Exception:
             self.remove(target)
-            raise QuickUnlockError("Zapis szybkiego odblokowania jest nieaktualny (np. klucz Windows Hello został "
-                                   "zmieniony). Odblokuj sejf hasłem – zostanie utworzony na nowo.")
+            raise QuickUnlockError(_("Zapis szybkiego odblokowania jest nieaktualny (np. klucz Windows Hello został "
+                                     "zmieniony). Odblokuj sejf hasłem – zostanie utworzony na nowo."))
         verified = datetime.fromisoformat(secret["verified_at"])
         if valid_days and _now() - verified > timedelta(days=valid_days):
-            raise QuickUnlockExpired(f"Minęło {valid_days} dni od ostatniego wpisania hasła głównego – wpisz je, "
-                                     "żeby go nie zapomnieć. Potem znów wystarczy Windows Hello.")
+            raise QuickUnlockExpired(_("Minęło {days} dni od ostatniego wpisania hasła głównego – wpisz je, "
+                                       "żeby go nie zapomnieć. Potem znów wystarczy Windows Hello.", days=valid_days))
         keyfile = base64.b64decode(secret["keyfile"]) if secret.get("keyfile") else None
         return secret["password"], keyfile
 

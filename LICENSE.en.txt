@@ -1,0 +1,32 @@
+﻿KeyStead (KeyStead Manager and KeyStead Server)
+Copyright (c) 2026 Łukasz Kubieniec. All rights reserved.
+
+LICENSE – PROPRIETARY SOFTWARE
+
+This is an English translation of the Polish license (LICENSE). If the two versions differ,
+the Polish version prevails.
+
+1. The KeyStead software, including the source code, executable files, installers, documentation,
+   graphics and other materials (the "Software"), is a work protected by copyright and is the
+   exclusive property of its author, Łukasz Kubieniec (the "Author").
+
+2. Use of the Software is permitted only with the Author's consent or under a separate license
+   agreement concluded with the Author. Making the source code available (e.g. on GitHub)
+   does not grant a license.
+
+3. Without the Author's written consent it is in particular prohibited to:
+   a) copy, modify, translate or create derivative works,
+   b) distribute, sell, rent, lend or make the Software available to third parties,
+   c) provide services to third parties using the Software (e.g. hosting, SaaS),
+   d) remove or change authorship marks and copyright notices,
+   to the extent going beyond cases permitted by mandatory provisions of law.
+
+4. The Software is provided "as is", without any warranty. To the fullest extent permitted by law,
+   the Author is not liable for damages resulting from the use of, or inability to use, the
+   Software, including loss of data. The user is responsible for keeping the master password
+   and backups.
+
+5. For licensing and cooperation: https://github.com/facior
+
+Third-party components included in the Software are covered by their own licenses, listed in
+THIRD-PARTY-NOTICES.txt in the program folder.

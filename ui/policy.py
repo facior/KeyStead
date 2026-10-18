@@ -7,10 +7,24 @@ krótszy czas blokady, szybsze czyszczenie schowka, silniejsze hasło główne.
 
 from typing import Any, Dict, List, Tuple
 
-LOCK_CHOICES: List[Tuple[str, int]] = [("1 minuta", 1), ("5 minut", 5), ("10 minut", 10), ("15 minut", 15),
-                                       ("30 minut", 30), ("Nigdy", 0)]
-CLIPBOARD_CHOICES: List[Tuple[str, int]] = [("10 sekund", 10), ("30 sekund", 30), ("60 sekund", 60), ("Nigdy", 0)]
-SCORE_LABELS = {0: "bez wymagań", 1: "słabe", 2: "średnie", 3: "silne", 4: "bardzo silne"}
+from core.i18n import _, _n
+
+# Etykiety tłumaczone raz przy wczytaniu modułu (język aplikacji nie zmienia się w trakcie działania);
+# formularze mapują je z powrotem na liczby przez te same listy, więc działa to w każdym języku.
+NEVER = _("Nigdy")
+
+
+def _minutes(n: int) -> str:
+    return _n(n, "{n} minuta", "{n} minuty", "{n} minut")
+
+
+def _seconds(n: int) -> str:
+    return _n(n, "{n} sekunda", "{n} sekundy", "{n} sekund")
+
+
+LOCK_CHOICES: List[Tuple[str, int]] = [(_minutes(m), m) for m in (1, 5, 10, 15, 30)] + [(NEVER, 0)]
+CLIPBOARD_CHOICES: List[Tuple[str, int]] = [(_seconds(s), s) for s in (10, 30, 60)] + [(NEVER, 0)]
+SCORE_LABELS = {0: _("bez wymagań"), 1: _("słabe"), 2: _("średnie"), 3: _("silne"), 4: _("bardzo silne")}
 
 
 # Sensowne zakresy limitów z serwera. Wartość spoza zakresu (np. ujemna) znaczy „bez limitu” – inaczej
@@ -50,9 +64,9 @@ def lock_choices(policy: Dict[str, Any]) -> List[Tuple[str, int]]:
         return list(LOCK_CHOICES)
     allowed = [(label, m) for label, m in LOCK_CHOICES if 0 < m <= limit]
     if (policy or {}).get("allow_never_lock"):
-        allowed.append(("Nigdy", 0))
-    if not any(m == limit for _, m in allowed):
-        allowed.insert(0, (f"{limit} min", limit))
+        allowed.append((NEVER, 0))
+    if not any(m == limit for _unused, m in allowed):
+        allowed.insert(0, (_("{n} min", n=limit), limit))
     return allowed
 
 
@@ -61,8 +75,8 @@ def clipboard_choices(policy: Dict[str, Any]) -> List[Tuple[str, int]]:
     if not limit:
         return list(CLIPBOARD_CHOICES)
     allowed = [(label, s) for label, s in CLIPBOARD_CHOICES if 0 < s <= limit]
-    if not any(s == limit for _, s in allowed):
-        allowed.append((f"{limit} sekund", limit))
+    if not any(s == limit for _unused, s in allowed):
+        allowed.append((_seconds(limit), limit))
     return allowed
 
 

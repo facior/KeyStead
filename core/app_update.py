@@ -21,6 +21,7 @@ from typing import Callable, Dict, Optional
 import requests
 
 from core import sshsig
+from core.i18n import _
 from core.version import APP_VERSION
 
 REPOSITORY = "facior/KeyStead"
@@ -83,7 +84,7 @@ def check_for_update(current: str = APP_VERSION, repository: str = REPOSITORY, t
     resp = http.get(api, params={"per_page": 30}, timeout=timeout,
                     headers={"Accept": "application/vnd.github+json", "User-Agent": "KeyStead-Manager"})
     if resp.status_code != 200:
-        raise UpdateError(f"GitHub odpowiedział kodem {resp.status_code}.")
+        raise UpdateError(_("GitHub odpowiedział kodem {code}.", code=resp.status_code))
     best = None
     for rel in resp.json():
         tag = rel.get("tag_name") or ""
@@ -121,10 +122,10 @@ def _fetch_signed_list(release: "AppRelease", http=requests):
     for key in ("sums", "sig"):
         url = release.assets.get(names[key])
         if not url:
-            raise UpdateError(f"Wydanie nie zawiera pliku {names[key]}.")
+            raise UpdateError(_("Wydanie nie zawiera pliku {name}.", name=names[key]))
         r = http.get(url, timeout=30, headers={"User-Agent": "KeyStead-Manager"})
         if r.status_code != 200 or len(r.content) > 64 * 1024:
-            raise UpdateError(f"Nie udało się pobrać {names[key]}.")
+            raise UpdateError(_("Nie udało się pobrać {name}.", name=names[key]))
         out.append(r.content)
     return out[0], out[1]
 
@@ -135,14 +136,14 @@ def expected_hash(sums: bytes, filename: str) -> str:
         parts = line.split()
         if len(parts) == 2 and parts[1].lstrip("*") == filename:
             return parts[0].lower()
-    raise UpdateError("Podpisana lista nie zawiera instalatora.")
+    raise UpdateError(_("Podpisana lista nie zawiera instalatora."))
 
 
 def verify_sums(sums: bytes, sig: bytes, public_key: str = RELEASE_PUBLIC_KEY) -> None:
     try:
         sshsig.verify(public_key, sums, sig, SIGNING_NAMESPACE)
     except sshsig.SignatureError as e:
-        raise UpdateError(f"NIEPRAWIDŁOWY PODPIS aktualizacji – instalacja odrzucona ({e}).")
+        raise UpdateError(_("NIEPRAWIDŁOWY PODPIS aktualizacji – instalacja odrzucona ({error}).", error=e))
 
 
 def download_update(release: AppRelease, dest_dir: Optional[str] = None,
@@ -152,7 +153,7 @@ def download_update(release: AppRelease, dest_dir: Optional[str] = None,
     names = asset_names(release.version)
     missing = [n for k, n in names.items() if k != "portable" and n not in release.assets]
     if missing:
-        raise UpdateError(f"Wydanie nie zawiera plików: {', '.join(missing)}.")
+        raise UpdateError(_("Wydanie nie zawiera plików: {files}.", files=', '.join(missing)))
 
     sums, sig = _fetch_signed_list(release, http)
     verify_sums(sums, sig, public_key)
@@ -167,20 +168,20 @@ def download_update(release: AppRelease, dest_dir: Optional[str] = None,
     with http.get(release.assets[names["setup"]], stream=True, timeout=60,
                   headers={"User-Agent": "KeyStead-Manager"}) as r:
         if r.status_code != 200:
-            raise UpdateError(f"Nie udało się pobrać instalatora (kod {r.status_code}).")
+            raise UpdateError(_("Nie udało się pobrać instalatora (kod {code}).", code=r.status_code))
         total = int(r.headers.get("Content-Length") or 0)
         with open(part, "wb") as f:
             for chunk in r.iter_content(256 * 1024):
                 done += len(chunk)
                 if done > MAX_INSTALLER_BYTES:
-                    raise UpdateError("Instalator jest zbyt duży.")
+                    raise UpdateError(_("Instalator jest zbyt duży."))
                 digest.update(chunk)
                 f.write(chunk)
                 if progress:
                     progress(done, total)
     if digest.hexdigest() != want:
         os.remove(part)
-        raise UpdateError("Suma kontrolna instalatora nie zgadza się z podpisaną listą – instalacja odrzucona.")
+        raise UpdateError(_("Suma kontrolna instalatora nie zgadza się z podpisaną listą – instalacja odrzucona."))
     os.replace(part, target)
     _verified[os.path.abspath(target)] = want
     return target
@@ -202,7 +203,7 @@ def launch_installer(path: str) -> None:
     # Ponowna kontrola tuż przed uruchomieniem: plik w %TEMP% mógł zostać podmieniony po pobraniu
     want = _verified.get(os.path.abspath(path))
     if not want or _sha256_file(path) != want:
-        raise UpdateError("Plik instalatora zmienił się po weryfikacji – instalacja przerwana.")
+        raise UpdateError(_("Plik instalatora zmienił się po weryfikacji – instalacja przerwana."))
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

@@ -18,6 +18,8 @@ from ctypes import wintypes
 from typing import Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from core.i18n import _
+
 IS_WINDOWS = sys.platform == "win32"
 
 # proces → sposób odszukania paska adresu (właściwość UI Automation, wartość)
@@ -190,7 +192,7 @@ class _UIA:
         """Czy element leży w treści strony (ma przodka typu Dokument) – takie pole może podrobić każda strona."""
         current, owned = element, []
         try:
-            for _ in range(60):
+            for __ in range(60):
                 parent = ctypes.c_void_p()
                 _call(walker, 3, current, ctypes.byref(parent), types=(ctypes.c_void_p, ctypes.c_void_p))  # GetParent
                 if not parent:
@@ -205,7 +207,7 @@ class _UIA:
                 _release(obj)
 
     def address_bar_value(self, hwnd: int, prop: int, value: str) -> Optional[str]:
-        root, ident, found, walker = (ctypes.c_void_p() for _ in range(4))
+        root, ident, found, walker = (ctypes.c_void_p() for __ in range(4))
         try:
             _call(self.uia, 6, hwnd, ctypes.byref(root), types=(wintypes.HWND, ctypes.c_void_p))  # ElementFromHandle
             ident = self._condition(prop, value)
@@ -363,7 +365,7 @@ class _MSAA:
     def _walk(self, acc, path, under_toolbar, found, time) -> None:
         self.visited += 1
         if self.visited > _MSAA_MAX_NODES or time.monotonic() - self.started > _MSAA_MAX_SECONDS or len(path) > 40:
-            raise OSError("MSAA: za duże drzewo okna")
+            raise OSError(_("MSAA: za duże drzewo okna"))
         role = self.role(acc)
         value = self._accept(acc, role, under_toolbar)
         if value is not None:

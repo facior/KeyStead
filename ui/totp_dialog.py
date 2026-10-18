@@ -8,6 +8,7 @@ from typing import Optional
 
 import customtkinter as ctk
 
+from core.i18n import N_, _, _n
 from ui.theme import (COLOR_CARD_DARK, COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_TEXT_MUTED, FONT_BODY, FONT_BODY_BOLD,
                       FONT_SMALL, FONT_SUBTITLE)
 
@@ -30,8 +31,8 @@ class TotpDialog(ctk.CTkToplevel):
         self.code_entry.bind("<Return>", lambda e: self._ok())
         row = ctk.CTkFrame(self.body, fg_color="transparent")
         row.pack(fill="x")
-        ctk.CTkButton(row, text="Anuluj", fg_color=COLOR_CARD_DARK, width=100, command=self._cancel).pack(side="left")
-        ctk.CTkButton(row, text="Potwierdź", fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, width=120,
+        ctk.CTkButton(row, text=_("Anuluj"), fg_color=COLOR_CARD_DARK, width=100, command=self._cancel).pack(side="left")
+        ctk.CTkButton(row, text=_("Potwierdź"), fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, width=120,
                       command=self._ok).pack(side="right")
 
     def _ok(self):
@@ -54,34 +55,34 @@ class TotpDialog(ctk.CTkToplevel):
 
     @classmethod
     def ask_code(cls, parent, message: str) -> Optional[str]:
-        dlg = cls(parent, "Kod 2FA")
-        ctk.CTkLabel(dlg.body, text="🔐 Wymagany kod 2FA", font=FONT_SUBTITLE).pack(anchor="w")
-        ctk.CTkLabel(dlg.body, text=message + "\n\nWpisz 6-cyfrowy kod z aplikacji uwierzytelniającej:",
+        dlg = cls(parent, _("Kod 2FA"))
+        ctk.CTkLabel(dlg.body, text=_("🔐 Wymagany kod 2FA"), font=FONT_SUBTITLE).pack(anchor="w")
+        ctk.CTkLabel(dlg.body, text=message + "\n\n" + _("Wpisz 6-cyfrowy kod z aplikacji uwierzytelniającej:"),
                      font=FONT_BODY, wraplength=360, justify="left").pack(anchor="w", pady=(4, 6))
         dlg._code_row()
         return dlg._run()
 
     @classmethod
     def setup(cls, parent, secret: str, uri: str) -> Optional[str]:
-        dlg = cls(parent, "Włącz logowanie dwuskładnikowe")
-        ctk.CTkLabel(dlg.body, text="🔐 Twoja firma wymaga 2FA", font=FONT_SUBTITLE).pack(anchor="w")
+        dlg = cls(parent, _("Włącz logowanie dwuskładnikowe"))
+        ctk.CTkLabel(dlg.body, text=_("🔐 Twoja firma wymaga 2FA"), font=FONT_SUBTITLE).pack(anchor="w")
         ctk.CTkLabel(
             dlg.body,
-            text="1. Otwórz aplikację uwierzytelniającą (Google Authenticator, Microsoft Authenticator, Aegis…).\n"
-                 "2. Wybierz „Dodaj konto” → „Wpisz klucz ręcznie” i wpisz poniższy klucz.\n"
-                 "3. Wpisz 6-cyfrowy kod, który pokaże aplikacja.",
+            text=_("1. Otwórz aplikację uwierzytelniającą (Google Authenticator, Microsoft Authenticator, Aegis…).\n"
+                   "2. Wybierz „Dodaj konto” → „Wpisz klucz ręcznie” i wpisz poniższy klucz.\n"
+                   "3. Wpisz 6-cyfrowy kod, który pokaże aplikacja."),
             font=FONT_BODY, wraplength=420, justify="left").pack(anchor="w", pady=(4, 8))
-        ctk.CTkLabel(dlg.body, text="Klucz:", font=FONT_BODY_BOLD).pack(anchor="w")
+        ctk.CTkLabel(dlg.body, text=_("Klucz:"), font=FONT_BODY_BOLD).pack(anchor="w")
         key = ctk.CTkEntry(dlg.body, width=420, font=("Consolas", 14))
         key.insert(0, " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)))
         key.configure(state="readonly")
         key.pack(pady=(2, 6))
-        ctk.CTkLabel(dlg.body, text="Link do aplikacji (jeśli obsługuje wklejanie otpauth://):",
+        ctk.CTkLabel(dlg.body, text=_("Link do aplikacji (jeśli obsługuje wklejanie otpauth://):"),
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w")
         link = ctk.CTkEntry(dlg.body, width=420, font=FONT_SMALL)
         link.insert(0, uri)
         link.configure(state="readonly")
         link.pack(pady=(2, 10))
-        ctk.CTkLabel(dlg.body, text="Kod z aplikacji:", font=FONT_BODY_BOLD).pack(anchor="w")
+        ctk.CTkLabel(dlg.body, text=_("Kod z aplikacji:"), font=FONT_BODY_BOLD).pack(anchor="w")
         dlg._code_row()
         return dlg._run()

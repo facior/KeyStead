@@ -14,6 +14,7 @@ from backups.webdav_backup import WebDAVBackupProvider
 from backups.google_drive import GoogleDriveBackupProvider
 from backups.onedrive_backup import OneDriveBackupProvider
 from backups.dropbox_backup import DropboxBackupProvider
+from core.i18n import _
 
 
 @contextmanager
@@ -80,7 +81,7 @@ class BackupManager:
     def test_provider(self, key: str, config: Dict[str, Any]) -> Tuple[bool, str]:
         provider = self.get_provider(key)
         if not provider:
-            return False, f"Nieznany dostawca kopii: {key}"
+            return False, _("Nieznany dostawca kopii: {key}", key=key)
         return provider.test_connection(config)
 
     def backup_to_provider(
@@ -92,7 +93,7 @@ class BackupManager:
     ) -> BackupStatus:
         provider = self.get_provider(key)
         if not provider:
-            return BackupStatus(key, False, error_message=f"Nieznany dostawca: {key}")
+            return BackupStatus(key, False, error_message=_("Nieznany dostawca: {key}", key=key))
         return provider.upload_backup(vault_file_path, config, custom_filename)
 
     def backup_to_all_configured(

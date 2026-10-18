@@ -8,6 +8,7 @@ import os
 from typing import Optional, List
 from importers.base import BaseImporter, ImportResult, ImportItem
 from core.totp_service import parse_otpauth_uri, sanitize_secret
+from core.i18n import _
 
 
 class BitwardenImporter(BaseImporter):
@@ -50,9 +51,9 @@ class BitwardenImporter(BaseImporter):
             elif ext == ".csv":
                 self._parse_csv(file_path, result)
             else:
-                result.add_error(f"Nieobsługiwane rozszerzenie: {ext}")
+                result.add_error(_("Nieobsługiwane rozszerzenie: {ext}", ext=ext))
         except Exception as e:
-            result.add_error(f"Błąd podczas przetwarzania pliku Bitwarden: {str(e)}")
+            result.add_error(_("Błąd podczas przetwarzania pliku Bitwarden: {error}", error=e))
 
         result.success = len(result.items) > 0 and len(result.errors) == 0
         return result
@@ -62,7 +63,7 @@ class BitwardenImporter(BaseImporter):
             data = json.load(f)
 
         if data.get("encrypted") is True:
-            result.add_error("Plik JSON Bitwarden jest zaszyfrowany. Wyeksportuj sejf z Bitwarden jako niezaszyfrowany JSON.")
+            result.add_error(_("Plik JSON Bitwarden jest zaszyfrowany. Wyeksportuj sejf z Bitwarden jako niezaszyfrowany JSON."))
             return
 
         folder_map = {}
@@ -72,7 +73,7 @@ class BitwardenImporter(BaseImporter):
 
         items = data.get("items", [])
         for item in items:
-            name = item.get("name", "Bez nazwy")
+            name = item.get("name", _("Bez nazwy"))
             notes = item.get("notes") or ""
             favorite = bool(item.get("favorite", False))
             folder_id = item.get("folderId")
@@ -81,15 +82,15 @@ class BitwardenImporter(BaseImporter):
             item_type = item.get("type", 1)
             # Typy: 1 = Login, 2 = Bezpieczna notatka, 3 = Karta, 4 = Tożsamość
             if item_type == 1:
-                category = folder_name or "Loginy"
+                category = folder_name or "Loginy"  # i18n: data
             elif item_type == 2:
-                category = "Bezpieczne notatki"
+                category = "Bezpieczne notatki"  # i18n: data
             elif item_type == 3:
-                category = "Karty płatnicze"
+                category = "Karty płatnicze"  # i18n: data
             elif item_type == 4:
-                category = "Tożsamości"
+                category = "Tożsamości"  # i18n: data
             else:
-                category = folder_name or "Loginy"
+                category = folder_name or "Loginy"  # i18n: data
 
             username = ""
             password = ""
@@ -123,11 +124,11 @@ class BitwardenImporter(BaseImporter):
             card_info = item.get("card") or {}
             if isinstance(card_info, dict) and card_info:
                 if card_info.get("cardholderName"):
-                    custom_fields["Właściciel karty"] = card_info["cardholderName"]
+                    custom_fields["Właściciel karty"] = card_info["cardholderName"]  # i18n: data
                 if card_info.get("number"):
-                    custom_fields["Numer karty"] = card_info["number"]
+                    custom_fields["Numer karty"] = card_info["number"]  # i18n: data
                 if card_info.get("expMonth") and card_info.get("expYear"):
-                    custom_fields["Ważność"] = f"{card_info['expMonth']}/{card_info['expYear']}"
+                    custom_fields["Ważność"] = f"{card_info['expMonth']}/{card_info['expYear']}"  # i18n: data
                 if card_info.get("code"):
                     custom_fields["CVV/CVC"] = card_info["code"]
 
@@ -147,12 +148,12 @@ class BitwardenImporter(BaseImporter):
         with open(file_path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                name = row.get("name") or row.get("Name") or "Bez tytułu"
+                name = row.get("name") or row.get("Name") or _("Bez tytułu")
                 username = row.get("login_username") or row.get("Username") or ""
                 password = row.get("login_password") or row.get("Password") or ""
                 url = row.get("login_uri") or row.get("URI") or row.get("URL") or ""
                 notes = row.get("notes") or row.get("Notes") or ""
-                folder = row.get("folder") or "Loginy"
+                folder = row.get("folder") or "Loginy"  # i18n: data
                 raw_totp = row.get("login_totp") or ""
 
                 totp = ""
@@ -167,7 +168,7 @@ class BitwardenImporter(BaseImporter):
 
                 result.add_item(ImportItem(
                     title=name,
-                    category=folder if folder else "Loginy",
+                    category=folder if folder else "Loginy",  # i18n: data
                     username=username,
                     password=password,
                     url=url,

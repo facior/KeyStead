@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from core.i18n import N_, _, _n, current_language
 from core.version import APP_VERSION
 
 
@@ -36,7 +37,7 @@ class ConflictError(SyncError):
     """Sejf na serwerze zmienił się od ostatniej synchronizacji."""
 
     def __init__(self, remote_meta: Optional[Dict[str, Any]]):
-        super().__init__("Sejf został zmieniony na innym urządzeniu.")
+        super().__init__(_("Sejf został zmieniony na innym urządzeniu."))
         self.remote_meta = remote_meta or {}
 
 
@@ -49,7 +50,7 @@ def check_server_url(url: str) -> Tuple[bool, str]:
     if parsed.scheme == "https" and parsed.hostname:
         return True, ""
     if parsed.scheme != "http" or not parsed.hostname:
-        return False, "Adres serwera musi zaczynać się od https:// (np. https://serwer.twoja-siec.ts.net)."
+        return False, _("Adres serwera musi zaczynać się od https:// (np. https://serwer.twoja-siec.ts.net).")
     host = parsed.hostname.lower()
     if host == "localhost" or host.endswith(".ts.net"):
         return True, ""
@@ -59,7 +60,7 @@ def check_server_url(url: str) -> Tuple[bool, str]:
             return True, ""
     except ValueError:
         pass
-    return False, "Połączenie http:// jest dozwolone tylko w sieci Tailscale. Użyj adresu https://"
+    return False, _("Połączenie http:// jest dozwolone tylko w sieci Tailscale. Użyj adresu https://")
 
 
 def _detail(resp: requests.Response) -> str:
@@ -89,16 +90,16 @@ def _send(session: requests.Session, method: str, url: str, timeout: float, veri
         if not tailscale_running():
             # Bez działającego Tailscale adres 100.x / *.ts.net trafiłby otwartym tekstem do sieci dostawcy lub
             # lokalnego DNS – token urządzenia i sejf nie mogą tam wyjść. Traktujemy jak brak połączenia.
-            raise NetworkError("Tailscale nie jest połączony – połączenie http:// byłoby nieszyfrowane. "
-                               "Włącz Tailscale i spróbuj ponownie.")
+            raise NetworkError(_("Tailscale nie jest połączony – połączenie http:// byłoby nieszyfrowane. "
+                                 "Włącz Tailscale i spróbuj ponownie."))
         session.trust_env = False  # z pominięciem systemowego proxy: ruch musi iść tunelem Tailscale
     try:
         # Ustawienia proxy systemu (także firmowe proxy z rejestru Windows) są uwzględniane automatycznie
         return session.request(method, url, timeout=timeout, verify=verify, **kwargs)
     except requests.exceptions.SSLError as e:
-        raise CertificateError(f"Certyfikat HTTPS serwera nie jest zaufany ({type(e).__name__}).")
+        raise CertificateError(_("Certyfikat HTTPS serwera nie jest zaufany ({error}).", error=type(e).__name__))
     except requests.RequestException as e:
-        raise NetworkError(f"Serwer jest nieosiągalny ({type(e).__name__}). Sprawdź połączenie z siecią lub VPN.")
+        raise NetworkError(_("Serwer jest nieosiągalny ({error}). Sprawdź połączenie z siecią lub VPN.", error=type(e).__name__))
 
 
 class TotpRequiredError(AuthError):
@@ -115,20 +116,22 @@ def enroll_device(base_url: str, code: str, device_name: str, ca_file: str = "",
     ok, msg = check_server_url(base_url)
     if not ok:
         raise SyncError(msg)
-    payload = {"code": code.strip(), "device_name": device_name.strip()[:64] or "Komputer"}
+    payload = {"code": code.strip(), "device_name": device_name.strip()[:64] or _("Komputer")}
     if totp:
         payload["totp"] = totp.strip().replace(" ", "")
-    resp = _send(requests.Session(), "POST", f"{base_url.rstrip('/')}{API}/enroll", timeout, ca_file or True, json=payload)
+    session = requests.Session()
+    session.headers.update({"Accept-Language": current_language()})  # komunikaty serwera w języku aplikacji
+    resp = _send(session, "POST", f"{base_url.rstrip('/')}{API}/enroll", timeout, ca_file or True, json=payload)
     if resp.status_code == 200:
         return resp.json()
     if resp.status_code == 404:
-        raise SyncError("Ten serwer nie obsługuje kodów aktywacyjnych – zaktualizuj serwer lub użyj tokenu urządzenia.")
+        raise SyncError(_("Ten serwer nie obsługuje kodów aktywacyjnych – zaktualizuj serwer lub użyj tokenu urządzenia."))
     try:
         body = resp.json()
     except ValueError:
         body = {}
     if resp.status_code == 401 and body.get("totp_required"):
-        raise TotpRequiredError(body.get("detail") or "Wymagany kod 2FA.")
+        raise TotpRequiredError(body.get("detail") or _("Wymagany kod 2FA."))
     raise AuthError(_detail(resp))
 
 
@@ -143,14 +146,15 @@ class RemoteVaultClient:
         self.verify = ca_file if ca_file and os.path.exists(ca_file) else True
         self._session = requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {token}", "User-Agent": f"KeyStead-Desktop/{APP_VERSION}",
-                                      "X-KeyStead-Version": APP_VERSION})
+                                      "X-KeyStead-Version": APP_VERSION,
+                                      "Accept-Language": current_language()})
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         resp = _send(self._session, method, f"{self.base_url}{API}{path}", self.timeout, self.verify, **kwargs)
         # Tylko 401 oznacza odebranie dostępu (odcięte urządzenie / zablokowane konto) – skutkuje usunięciem
         # lokalnej kopii. 403 to np. połączenie z niedozwolonej sieci, więc NIE może niczego kasować.
         if resp.status_code == 401:
-            raise AuthError(_detail(resp) or "Serwer odrzucił token urządzenia.")
+            raise AuthError(_detail(resp) or _("Serwer odrzucił token urządzenia."))
         if resp.status_code in (403, 429):
             raise SyncError(_detail(resp))
         return resp
@@ -160,21 +164,21 @@ class RemoteVaultClient:
     def health(self) -> Dict[str, Any]:
         resp = self._request("GET", "/health")
         if resp.status_code != 200:
-            raise SyncError(f"Serwer zwrócił błąd {resp.status_code}.")
+            raise SyncError(_("Serwer zwrócił błąd {code}.", code=resp.status_code))
         return resp.json()
 
     def meta(self) -> Dict[str, Any]:
         """Zwraca {"exists": bool, "meta": {...}|None, "device": nazwa, "server_id": ...}."""
         resp = self._request("GET", "/vault/meta")
         if resp.status_code != 200:
-            raise SyncError(f"Błąd serwera ({resp.status_code}): {self._detail(resp)}")
+            raise SyncError(_("Błąd serwera ({code}): {details}", code=resp.status_code, details=self._detail(resp)))
         return resp.json()
 
     def download(self, version: Optional[int] = None) -> Tuple[bytes, int]:
         path = "/vault" if version is None else f"/vault/history/{int(version)}"
         resp = self._request("GET", path)
         if resp.status_code != 200:
-            raise SyncError(f"Nie udało się pobrać sejfu ({resp.status_code}): {self._detail(resp)}")
+            raise SyncError(_("Nie udało się pobrać sejfu ({code}): {details}", code=resp.status_code, details=self._detail(resp)))
         return resp.content, int(resp.headers.get("X-Vault-Version", "0"))
 
     def upload(self, blob: bytes, base_version: int) -> Dict[str, Any]:
@@ -185,13 +189,13 @@ class RemoteVaultClient:
         if resp.status_code == 409:
             raise ConflictError(resp.json().get("meta"))
         if resp.status_code != 200:
-            raise SyncError(f"Serwer odrzucił zapis ({resp.status_code}): {self._detail(resp)}")
+            raise SyncError(_("Serwer odrzucił zapis ({code}): {details}", code=resp.status_code, details=self._detail(resp)))
         return resp.json()["meta"]
 
     def history(self) -> List[Dict[str, Any]]:
         resp = self._request("GET", "/vault/history")
         if resp.status_code != 200:
-            raise SyncError(f"Nie udało się pobrać historii ({resp.status_code}).")
+            raise SyncError(_("Nie udało się pobrać historii ({code}).", code=resp.status_code))
         return resp.json().get("versions", [])
 
     # --- załączniki (już zaszyfrowane przez aplikację)
@@ -199,14 +203,14 @@ class RemoteVaultClient:
         resp = self._request("PUT", f"/attachments/{att_id}", data=blob,
                              headers={"Content-Type": "application/octet-stream"})
         if resp.status_code != 200:
-            raise SyncError(f"Serwer odrzucił załącznik ({resp.status_code}): {self._detail(resp)}")
+            raise SyncError(_("Serwer odrzucił załącznik ({code}): {details}", code=resp.status_code, details=self._detail(resp)))
 
     def download_attachment(self, att_id: str, max_bytes: int = 60 * 1024 * 1024) -> bytes:
         resp = self._request("GET", f"/attachments/{att_id}")
         if resp.status_code != 200:
-            raise SyncError(f"Nie udało się pobrać załącznika ({resp.status_code}): {self._detail(resp)}")
+            raise SyncError(_("Nie udało się pobrać załącznika ({code}): {details}", code=resp.status_code, details=self._detail(resp)))
         if len(resp.content) > max_bytes:
-            raise SyncError("Załącznik z serwera jest zbyt duży.")
+            raise SyncError(_("Załącznik z serwera jest zbyt duży."))
         return resp.content
 
     def delete_attachment(self, att_id: str) -> None:
@@ -227,6 +231,28 @@ class RemoteVaultClient:
                      json={"code": code.strip().replace(" ", "")})
         if resp.status_code != 200:
             raise SyncError(_detail(resp))
+
+    # --- jednorazowe linki do haseł (treść zaszyfrowana przez aplikację, klucz tylko w linku)
+    def create_share(self, ciphertext: str, iv: str, proof: str, hours: int, has_password: bool) -> Dict[str, Any]:
+        resp = self._request("POST", "/shares", json={"ciphertext": ciphertext, "iv": iv, "proof": proof,
+                                                     "hours": hours, "has_password": has_password})
+        if resp.status_code == 404:
+            raise SyncError(_("Serwer firmy nie obsługuje jeszcze bezpiecznych linków – administrator musi go "
+                              "zaktualizować."))
+        if resp.status_code != 200:
+            raise SyncError(_("Nie udało się utworzyć linku ({code}): {details}", code=resp.status_code,
+                              details=self._detail(resp)))
+        return resp.json()
+
+    def list_shares(self) -> List[Dict[str, Any]]:
+        resp = self._request("GET", "/shares")
+        if resp.status_code != 200:
+            raise SyncError(self._detail(resp))
+        return resp.json().get("items", [])
+
+    def revoke_share(self, share_id: str) -> bool:
+        resp = self._request("DELETE", f"/shares/{share_id}")
+        return resp.status_code == 200 and bool(resp.json().get("revoked"))
 
     def send_report(self, report: Dict[str, Any]) -> bool:
         """Wysyła zbiorczy wynik audytu (tylko liczby). Zwraca False, gdy raporty są wyłączone."""

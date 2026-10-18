@@ -12,11 +12,8 @@ from importers import apply_import
 from importers.base import ImportItem, ImportResult, MAX_IMPORT_ITEMS
 from importers.keepass import check_kdbx_header
 
-try:
-    import pykeepass
-    BLANK_KDBX = os.path.join(os.path.dirname(pykeepass.__file__), "blank_database.kdbx")
-except ImportError:
-    BLANK_KDBX = ""
+BLANK_KDBX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "kdbx",
+                          "test_db_kdbx4_with_password_argon2.kdbx")
 
 
 def kdbx4_header(params: dict) -> bytes:
@@ -39,7 +36,6 @@ class TestKdbxHeader(unittest.TestCase):
         self.addCleanup(os.remove, path)
         return path
 
-    @unittest.skipUnless(BLANK_KDBX and os.path.exists(BLANK_KDBX), "brak pykeepass")
     def test_real_database_accepted(self):
         self.assertEqual(check_kdbx_header(BLANK_KDBX), "")
 

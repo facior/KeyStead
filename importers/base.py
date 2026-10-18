@@ -6,10 +6,11 @@ import re
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
 from urllib.parse import urlparse
+from core.i18n import _
 from core.vault import VaultEntry, Vault, as_fields, as_tags, as_text
 
 MAX_IMPORT_ITEMS = 50_000  # ochrona przed plikami „bombami” – realne eksporty mają setki/tysiące wpisów
-PLACEHOLDER_TITLES = {"", "-", "--", "---", "bez tytułu", "bez nazwy", "untitled", "no name"}
+PLACEHOLDER_TITLES = {"", "-", "--", "---", "bez tytułu", "bez nazwy", "untitled", "no name"}  # i18n: data
 _SITE_PREFIX = re.compile(r"^([^\s,]+\.[^\s,]+),\s*(\S.*)$")
 
 
@@ -59,7 +60,7 @@ class ImportItem:
     def __init__(
         self,
         title: str,
-        category: str = "Loginy",
+        category: str = "Loginy",  # i18n: data
         username: str = "",
         password: str = "",
         url: str = "",
@@ -71,8 +72,8 @@ class ImportItem:
     ):
         # Plik importu to niezaufane dane: każde pole sprowadzane do właściwego typu (lista/słownik w miejscu
         # tekstu psułaby wyszukiwanie i audyt sejfu), z limitem długości
-        self.title = as_text(title, 500) or "Bez tytułu"
-        self.category = as_text(category, 200) or "Loginy"
+        self.title = as_text(title, 500) or _("Bez tytułu")
+        self.category = as_text(category, 200) or "Loginy"  # i18n: data
         self.username = as_text(username, 1000)
         self.password = as_text(password, 10_000)
         self.url = as_text(url, 4000)
@@ -108,8 +109,10 @@ class ImportResult:
     def add_item(self, item: ImportItem) -> None:
         if len(self.items) >= MAX_IMPORT_ITEMS:
             if not any("limit" in e for e in self.errors):
-                self.add_error(f"Plik zawiera więcej niż {MAX_IMPORT_ITEMS} wpisów – zaimportowano tylko pierwsze "
-                               f"{MAX_IMPORT_ITEMS} (limit chroniący przed uszkodzonymi lub złośliwymi plikami).")
+                # tłumaczenie musi zawierać słowo „limit” (sprawdzane wyżej)
+                self.add_error(_("Plik zawiera więcej niż {limit} wpisów – zaimportowano tylko pierwsze "
+                                 "{limit} (limit chroniący przed uszkodzonymi lub złośliwymi plikami).",
+                                 limit=MAX_IMPORT_ITEMS))
             return
         item.title, item.username = tidy_login(item.title, item.username, item.url)
         self.items.append(item)

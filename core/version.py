@@ -1,15 +1,15 @@
 """Wersja aplikacji KeyStead Manager (podnoszona przy każdym wydaniu – tools/release_app.py)."""
 
 APP_NAME = "KeyStead Manager"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.1.0"
 
 # Wersjonowanie produktu: pierwsze dwie liczby wspólne dla aplikacji i serwera (nowe funkcje – razem),
 # ostatnia osobno (poprawki). Aplikacja X.Y.* współpracuje z serwerem X.Y.* (i nowszym).
-AUTHOR = "Łukasz Kubieniec"
+AUTHOR = "Łukasz Kubieniec"  # i18n: data
 AUTHOR_GITHUB = "https://github.com/facior"
 APP_REPOSITORY_URL = "https://github.com/facior/KeyStead"
 SERVER_REPOSITORY_URL = "https://github.com/facior/KeyStead-Manager"
-COPYRIGHT = "© 2026 Łukasz Kubieniec. Wszelkie prawa zastrzeżone."
+COPYRIGHT = "© 2026 Łukasz Kubieniec. Wszelkie prawa zastrzeżone."  # i18n: data (okno „O programie” tłumaczy własny tekst)
 
 
 def product_line(version: str) -> tuple:

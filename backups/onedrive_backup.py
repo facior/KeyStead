@@ -12,6 +12,7 @@ import requests
 from backups.base import BaseBackupProvider, BackupStatus
 from backups import oauth
 from core.crypto import compute_sha256
+from core.i18n import _
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 REMOTE_FOLDER = "KeyStead-Backups"
@@ -33,8 +34,8 @@ class OneDriveBackupProvider(BaseBackupProvider):
         resp = requests.get(f"{GRAPH}/me", headers={"Authorization": f"Bearer {token}"}, timeout=10)
         if resp.status_code == 200:
             me = resp.json()
-            return me.get("userPrincipalName") or me.get("mail") or me.get("displayName") or "Konto Microsoft"
-        return "Konto Microsoft"
+            return me.get("userPrincipalName") or me.get("mail") or me.get("displayName") or _("Konto Microsoft")
+        return _("Konto Microsoft")
 
     def test_connection(self, config: Dict[str, Any]) -> Tuple[bool, str]:
         folder = config.get("folder_path", "").strip()
@@ -49,19 +50,19 @@ class OneDriveBackupProvider(BaseBackupProvider):
                 if resp.status_code == 200:
                     quota = resp.json().get("quota", {})
                     free_gb = quota.get("remaining", 0) / 1024 ** 3
-                    return True, f"Połączono z OneDrive ({free_gb:.1f} GB wolnego miejsca)."
+                    return True, _("Połączono z OneDrive ({free_gb:.1f} GB wolnego miejsca).", free_gb=free_gb)
                 if resp.status_code == 401:
-                    return False, "Sesja OneDrive wygasła – zaloguj się ponownie."
-                return False, f"Błąd OneDrive API: {resp.status_code}"
+                    return False, _("Sesja OneDrive wygasła – zaloguj się ponownie.")
+                return False, _("Błąd OneDrive API: {code}", code=resp.status_code)
             except requests.RequestException as e:
-                return False, f"Błąd połączenia z OneDrive: {e}"
+                return False, _("Błąd połączenia z OneDrive: {error}", error=e)
 
         if folder:
             if os.path.isdir(folder):
-                return True, f"Folder OneDrive dostępny: {folder}"
-            return False, f"Folder OneDrive nie istnieje: {folder}"
+                return True, _("Folder OneDrive dostępny: {folder}", folder=folder)
+            return False, _("Folder OneDrive nie istnieje: {folder}", folder=folder)
 
-        return False, "Zaloguj się kontem Microsoft lub wybierz folder OneDrive."
+        return False, _("Zaloguj się kontem Microsoft lub wybierz folder OneDrive.")
 
     def upload_backup(
         self,
@@ -70,7 +71,7 @@ class OneDriveBackupProvider(BaseBackupProvider):
         custom_filename: Optional[str] = None
     ) -> BackupStatus:
         if not os.path.exists(vault_file_path):
-            return BackupStatus(self.name, False, error_message="Plik źródłowy sejfu nie istnieje.")
+            return BackupStatus(self.name, False, error_message=_("Plik źródłowy sejfu nie istnieje."))
 
         with open(vault_file_path, "rb") as f:
             data = f.read()
@@ -101,9 +102,9 @@ class OneDriveBackupProvider(BaseBackupProvider):
                         destination_path=f"OneDrive: /{REMOTE_FOLDER}/{filename}",
                         checksum=sha256_sum, size_bytes=len(data)
                     )
-                return BackupStatus(self.name, False, error_message=f"Błąd Microsoft Graph API ({resp.status_code}): {resp.text[:300]}")
+                return BackupStatus(self.name, False, error_message=_("Błąd Microsoft Graph API ({code}): {details}", code=resp.status_code, details=resp.text[:300]))
             except requests.RequestException as e:
-                return BackupStatus(self.name, False, error_message=f"Błąd wysyłania do OneDrive: {e}")
+                return BackupStatus(self.name, False, error_message=_("Błąd wysyłania do OneDrive: {error}", error=e))
 
         if folder:
             try:
@@ -116,6 +117,6 @@ class OneDriveBackupProvider(BaseBackupProvider):
                     os.fsync(f.fileno())
                 return BackupStatus(self.name, True, destination_path=target, checksum=sha256_sum, size_bytes=len(data))
             except OSError as e:
-                return BackupStatus(self.name, False, error_message=f"Błąd zapisu do folderu OneDrive: {e}")
+                return BackupStatus(self.name, False, error_message=_("Błąd zapisu do folderu OneDrive: {error}", error=e))
 
-        return BackupStatus(self.name, False, error_message="Brak konfiguracji OneDrive.")
+        return BackupStatus(self.name, False, error_message=_("Brak konfiguracji OneDrive."))

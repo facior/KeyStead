@@ -12,6 +12,7 @@ import requests
 from backups.base import BaseBackupProvider, BackupStatus
 from backups import oauth
 from core.crypto import compute_sha256
+from core.i18n import _
 
 REMOTE_FOLDER = "KeyStead-Backups"
 
@@ -36,8 +37,8 @@ class DropboxBackupProvider(BaseBackupProvider):
         )
         if resp.status_code == 200:
             acc = resp.json()
-            return acc.get("email") or acc.get("name", {}).get("display_name") or "Konto Dropbox"
-        return "Konto Dropbox"
+            return acc.get("email") or acc.get("name", {}).get("display_name") or _("Konto Dropbox")
+        return _("Konto Dropbox")
 
     def test_connection(self, config: Dict[str, Any]) -> Tuple[bool, str]:
         folder = config.get("folder_path", "").strip()
@@ -54,19 +55,19 @@ class DropboxBackupProvider(BaseBackupProvider):
                     timeout=10
                 )
                 if resp.status_code == 200:
-                    return True, f"Połączono z Dropbox ({resp.json().get('email', 'konto Dropbox')})."
+                    return True, _("Połączono z Dropbox ({account}).", account=resp.json().get('email') or _('konto Dropbox'))
                 if resp.status_code == 401:
-                    return False, "Sesja Dropbox wygasła – zaloguj się ponownie."
-                return False, f"Błąd Dropbox API: {resp.status_code}"
+                    return False, _("Sesja Dropbox wygasła – zaloguj się ponownie.")
+                return False, _("Błąd Dropbox API: {code}", code=resp.status_code)
             except requests.RequestException as e:
-                return False, f"Błąd połączenia z Dropbox API: {e}"
+                return False, _("Błąd połączenia z Dropbox API: {error}", error=e)
 
         if folder:
             if os.path.isdir(folder):
-                return True, f"Folder Dropbox dostępny: {folder}"
-            return False, f"Folder Dropbox nie istnieje: {folder}"
+                return True, _("Folder Dropbox dostępny: {folder}", folder=folder)
+            return False, _("Folder Dropbox nie istnieje: {folder}", folder=folder)
 
-        return False, "Zaloguj się kontem Dropbox lub wybierz folder Dropbox."
+        return False, _("Zaloguj się kontem Dropbox lub wybierz folder Dropbox.")
 
     def upload_backup(
         self,
@@ -75,7 +76,7 @@ class DropboxBackupProvider(BaseBackupProvider):
         custom_filename: Optional[str] = None
     ) -> BackupStatus:
         if not os.path.exists(vault_file_path):
-            return BackupStatus(self.name, False, error_message="Plik źródłowy sejfu nie istnieje.")
+            return BackupStatus(self.name, False, error_message=_("Plik źródłowy sejfu nie istnieje."))
 
         with open(vault_file_path, "rb") as f:
             data = f.read()
@@ -103,9 +104,9 @@ class DropboxBackupProvider(BaseBackupProvider):
                 resp = requests.post("https://content.dropboxapi.com/2/files/upload", headers=headers, data=data, timeout=60)
                 if resp.status_code == 200:
                     return BackupStatus(self.name, True, destination_path=f"Dropbox: {dest_path}", checksum=sha256_sum, size_bytes=len(data))
-                return BackupStatus(self.name, False, error_message=f"Błąd Dropbox API ({resp.status_code}): {resp.text[:300]}")
+                return BackupStatus(self.name, False, error_message=_("Błąd Dropbox API ({code}): {details}", code=resp.status_code, details=resp.text[:300]))
             except requests.RequestException as e:
-                return BackupStatus(self.name, False, error_message=f"Błąd wysyłania do Dropbox: {e}")
+                return BackupStatus(self.name, False, error_message=_("Błąd wysyłania do Dropbox: {error}", error=e))
 
         if folder:
             try:
@@ -118,6 +119,6 @@ class DropboxBackupProvider(BaseBackupProvider):
                     os.fsync(f.fileno())
                 return BackupStatus(self.name, True, destination_path=target, checksum=sha256_sum, size_bytes=len(data))
             except OSError as e:
-                return BackupStatus(self.name, False, error_message=f"Błąd zapisu do folderu Dropbox: {e}")
+                return BackupStatus(self.name, False, error_message=_("Błąd zapisu do folderu Dropbox: {error}", error=e))
 
-        return BackupStatus(self.name, False, error_message="Brak konfiguracji Dropbox.")
+        return BackupStatus(self.name, False, error_message=_("Brak konfiguracji Dropbox."))

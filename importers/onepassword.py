@@ -9,21 +9,22 @@ import zipfile
 from typing import Optional, List
 from importers.base import BaseImporter, ImportResult, ImportItem
 from core.totp_service import parse_otpauth_uri, sanitize_secret
+from core.i18n import _
 
 
 MAX_EXPORT_DATA_BYTES = 50 * 1024 * 1024  # JSON 200 MB to kilka GB obiektów Pythona – realne eksporty są dużo mniejsze
 
 CATEGORY_MAP = {
-    "001": "Loginy",
-    "002": "Karty płatnicze",
-    "003": "Bezpieczne notatki",
-    "004": "Tożsamości",
-    "005": "Loginy",
-    "006": "Dokumenty",
-    "100": "Karty płatnicze",
-    "101": "Konta bankowe",
-    "110": "Bazy danych",
-    "111": "Serwery"
+    "001": "Loginy",  # i18n: data
+    "002": "Karty płatnicze",  # i18n: data
+    "003": "Bezpieczne notatki",  # i18n: data
+    "004": "Tożsamości",  # i18n: data
+    "005": "Loginy",  # i18n: data
+    "006": "Dokumenty",  # i18n: data
+    "100": "Karty płatnicze",  # i18n: data
+    "101": "Konta bankowe",  # i18n: data
+    "110": "Bazy danych",  # i18n: data
+    "111": "Serwery"  # i18n: data
 }
 
 
@@ -84,9 +85,9 @@ class OnePasswordImporter(BaseImporter):
             elif ext == ".csv":
                 self._parse_csv(file_path, result)
             else:
-                result.add_error(f"Nieobsługiwane rozszerzenie: {ext}")
+                result.add_error(_("Nieobsługiwane rozszerzenie: {ext}", ext=ext))
         except Exception as e:
-            result.add_error(f"Błąd podczas wczytywania danych 1Password: {str(e)}")
+            result.add_error(_("Błąd podczas wczytywania danych 1Password: {error}", error=e))
 
         result.success = len(result.items) > 0 and len(result.errors) == 0
         return result
@@ -95,16 +96,16 @@ class OnePasswordImporter(BaseImporter):
         try:
             with zipfile.ZipFile(file_path, "r") as z:
                 if "export.data" not in z.namelist():
-                    result.add_error("Archiwum .1pux nie zawiera pliku export.data.")
+                    result.add_error(_("Archiwum .1pux nie zawiera pliku export.data."))
                     return
                 # Ochrona przed "zip bombą" – prawdziwe eksporty mają co najwyżej kilkadziesiąt MB
                 if z.getinfo("export.data").file_size > MAX_EXPORT_DATA_BYTES:
-                    result.add_error("Plik export.data jest podejrzanie duży (>200 MB) – import przerwany.")
+                    result.add_error(_("Plik export.data jest podejrzanie duży (>200 MB) – import przerwany."))
                     return
                 with z.open("export.data") as f:
                     data = json.load(f)
         except Exception as e:
-            result.add_error(f"Błąd odczytu archiwum zip 1Password: {str(e)}")
+            result.add_error(_("Błąd odczytu archiwum zip 1Password: {error}", error=e))
             return
 
         accounts = data.get("accounts", [])
@@ -114,10 +115,10 @@ class OnePasswordImporter(BaseImporter):
                 items = v.get("items", [])
                 for item in items:
                     cat_uuid = item.get("categoryUuid", "")
-                    category = CATEGORY_MAP.get(cat_uuid, "Loginy")
+                    category = CATEGORY_MAP.get(cat_uuid, "Loginy")  # i18n: data
 
                     overview = item.get("overview") or {}
-                    title = overview.get("title") or item.get("title") or "Bez tytułu"
+                    title = overview.get("title") or item.get("title") or _("Bez tytułu")
                     url = overview.get("url") or ""
                     if not url and overview.get("urls"):
                         first_url = overview["urls"][0]
@@ -143,7 +144,7 @@ class OnePasswordImporter(BaseImporter):
                         elif designation == "password" and not password:
                             password = fval
                         elif fval and f.get("fieldType") not in ("B", "I"):
-                            flabel = f.get("name") or f.get("title") or f.get("id") or "pole"
+                            flabel = f.get("name") or f.get("title") or f.get("id") or _("pole")
                             custom_fields[str(flabel)] = fval
 
                     # Sekcje (TOTP, dane karty, pola niestandardowe)
@@ -175,12 +176,12 @@ class OnePasswordImporter(BaseImporter):
         with open(file_path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                title = row.get("Title") or row.get("title") or "Bez tytułu"
+                title = row.get("Title") or row.get("title") or _("Bez tytułu")
                 username = row.get("Username") or row.get("username") or ""
                 password = row.get("Password") or row.get("password") or ""
                 url = row.get("Url") or row.get("URL") or row.get("url") or ""
                 notes = row.get("Notes") or row.get("notes") or ""
-                category = row.get("Type") or row.get("type") or "Loginy"
+                category = row.get("Type") or row.get("type") or "Loginy"  # i18n: data
 
                 raw_totp = row.get("OTP") or row.get("totp") or row.get("one-time password") or ""
                 totp = _extract_totp(raw_totp)

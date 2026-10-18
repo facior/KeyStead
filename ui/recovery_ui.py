@@ -15,6 +15,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 from core.crypto import (CryptoError, generate_org_keypair, load_org_private_key, seal, unseal_with_org_key)
+from core.i18n import N_, _, _n
 from core.generator import check_master_password, evaluate_password_strength, generate_password
 from ui.theme import (COLOR_CARD_DARK, COLOR_DANGER, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_TEXT_MUTED,
                       COLOR_TEXT_PRIMARY, FONT_BODY, FONT_SMALL, FONT_SUBTITLE, FONT_TITLE)
@@ -48,24 +49,24 @@ class RecoveryCodeDialog(_Modal):
     """Kod odzyskiwania pokazywany jeden raz – zamknięcie dopiero po potwierdzeniu, że został zapisany."""
 
     def __init__(self, master, code: str, vault_name: str):
-        super().__init__(master, "Kod odzyskiwania", 560, 400)
+        super().__init__(master, _("Kod odzyskiwania"), 560, 400)
         self.code = code
-        ctk.CTkLabel(self, text="🔑 Twój kod odzyskiwania", font=FONT_TITLE).pack(anchor="w", padx=20, pady=(16, 4))
-        ctk.CTkLabel(self, text=("Pozwala odzyskać dostęp do sejfu, gdy zapomnisz hasła głównego. Pokazujemy go tylko teraz – "
-                                 "zapisz go lub wydrukuj i przechowuj poza komputerem (np. w sejfie domowym)."),
+        ctk.CTkLabel(self, text=_("🔑 Twój kod odzyskiwania"), font=FONT_TITLE).pack(anchor="w", padx=20, pady=(16, 4))
+        ctk.CTkLabel(self, text=_("Pozwala odzyskać dostęp do sejfu, gdy zapomnisz hasła głównego. Pokazujemy go tylko teraz – "
+                                  "zapisz go lub wydrukuj i przechowuj poza komputerem (np. w sejfie domowym)."),
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=510, justify="left").pack(anchor="w", padx=20)
         box = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK, corner_radius=10)
         box.pack(fill="x", padx=20, pady=14)
         ctk.CTkLabel(box, text=code, font=("Consolas", 20, "bold"), text_color=COLOR_SUCCESS).pack(pady=14)
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=20)
-        ctk.CTkButton(row, text="Kopiuj", width=90, fg_color=COLOR_CARD_DARK, command=self._copy).pack(side="left")
-        ctk.CTkButton(row, text="Zapisz do pliku…", width=130, fg_color=COLOR_CARD_DARK,
+        ctk.CTkButton(row, text=_("Kopiuj"), width=90, fg_color=COLOR_CARD_DARK, command=self._copy).pack(side="left")
+        ctk.CTkButton(row, text=_("Zapisz do pliku…"), width=130, fg_color=COLOR_CARD_DARK,
                       command=lambda: self._save(vault_name)).pack(side="left", padx=8)
         self.ok_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(self, text="Zapisałem kod w bezpiecznym miejscu", variable=self.ok_var,
+        ctk.CTkCheckBox(self, text=_("Zapisałem kod w bezpiecznym miejscu"), variable=self.ok_var,
                         command=self._toggle).pack(anchor="w", padx=20, pady=(16, 6))
-        self.done_btn = ctk.CTkButton(self, text="Gotowe", state="disabled", fg_color=COLOR_PRIMARY, command=self._done)
+        self.done_btn = ctk.CTkButton(self, text=_("Gotowe"), state="disabled", fg_color=COLOR_PRIMARY, command=self._done)
         self.done_btn.pack(anchor="e", padx=20, pady=(4, 12))
         self.protocol("WM_DELETE_WINDOW", self._close_attempt)
 
@@ -74,21 +75,22 @@ class RecoveryCodeDialog(_Modal):
         self.clipboard_append(self.code)
 
     def _save(self, vault_name: str):
-        path = filedialog.asksaveasfilename(title="Zapisz kod odzyskiwania", defaultextension=".txt",
-                                            initialfile="KeyStead - kod odzyskiwania.txt", parent=self)
+        path = filedialog.asksaveasfilename(title=_("Zapisz kod odzyskiwania"), defaultextension=".txt",
+                                            initialfile=_("KeyStead - kod odzyskiwania.txt"), parent=self)
         if path:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(f"KeyStead Manager – kod odzyskiwania sejfu „{vault_name}”\n"
-                        f"Utworzono: {datetime.now():%Y-%m-%d %H:%M}\n\n{self.code}\n\n"
-                        "Przechowuj ten plik poza komputerem (pendrive w szufladzie, wydruk). "
-                        "Każdy, kto ma ten kod i plik sejfu, może ustawić nowe hasło główne.\n")
+                f.write(_("KeyStead Manager – kod odzyskiwania sejfu „{vault}”\n"
+                          "Utworzono: {created}\n\n{code}\n\n"
+                          "Przechowuj ten plik poza komputerem (pendrive w szufladzie, wydruk). "
+                          "Każdy, kto ma ten kod i plik sejfu, może ustawić nowe hasło główne.\n",
+                          vault=vault_name, created=f"{datetime.now():%Y-%m-%d %H:%M}", code=self.code))
 
     def _toggle(self):
         self.done_btn.configure(state="normal" if self.ok_var.get() else "disabled")
 
     def _close_attempt(self):
-        if self.ok_var.get() or messagebox.askyesno("Kod odzyskiwania", "Na pewno zamknąć bez zapisania kodu? "
-                                                                       "Nie będzie można go wyświetlić ponownie.", parent=self):
+        if self.ok_var.get() or messagebox.askyesno(_("Kod odzyskiwania"), _("Na pewno zamknąć bez zapisania kodu? "
+                                                                            "Nie będzie można go wyświetlić ponownie."), parent=self):
             self._done()
 
     def _done(self):
@@ -117,33 +119,33 @@ class NewPasswordDialog(_Modal):
     """Nowe hasło główne (po odzyskaniu dostępu) – z kontrolą siły jak przy zmianie hasła."""
 
     def __init__(self, master, min_score: int = 0, intro: str = ""):
-        super().__init__(master, "Nowe hasło główne", 480, 330)
+        super().__init__(master, _("Nowe hasło główne"), 480, 330)
         self.min_score = min_score
-        ctk.CTkLabel(self, text="🔑 Ustaw nowe hasło główne", font=FONT_SUBTITLE).pack(anchor="w", padx=20, pady=(16, 4))
+        ctk.CTkLabel(self, text=_("🔑 Ustaw nowe hasło główne"), font=FONT_SUBTITLE).pack(anchor="w", padx=20, pady=(16, 4))
         if intro:
             ctk.CTkLabel(self, text=intro, font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=430,
                          justify="left").pack(anchor="w", padx=20)
-        self.p1 = ctk.CTkEntry(self, show="•", placeholder_text="Nowe hasło główne...", height=34)
+        self.p1 = ctk.CTkEntry(self, show="•", placeholder_text=_("Nowe hasło główne..."), height=34)
         self.p1.pack(fill="x", padx=20, pady=(12, 4))
-        self.p2 = ctk.CTkEntry(self, show="•", placeholder_text="Powtórz hasło...", height=34)
+        self.p2 = ctk.CTkEntry(self, show="•", placeholder_text=_("Powtórz hasło..."), height=34)
         self.p2.pack(fill="x", padx=20, pady=4)
         self.err = ctk.CTkLabel(self, text="", text_color=COLOR_DANGER, font=FONT_SMALL, wraplength=430)
         self.err.pack(anchor="w", padx=20)
-        ctk.CTkButton(self, text="Ustaw hasło", fg_color=COLOR_SUCCESS, command=self._ok).pack(anchor="e", padx=20, pady=10)
+        ctk.CTkButton(self, text=_("Ustaw hasło"), fg_color=COLOR_SUCCESS, command=self._ok).pack(anchor="e", padx=20, pady=10)
         self.p2.bind("<Return>", lambda e: self._ok())
         self.after(200, self.p1.focus_set)
 
     def _ok(self):
         p1, p2 = self.p1.get(), self.p2.get()
         if p1 != p2:
-            self.err.configure(text="Hasła nie są identyczne.")
+            self.err.configure(text=_("Hasła nie są identyczne."))
             return
         allowed, msg = check_master_password(p1)
         if not allowed:
             self.err.configure(text=msg)
             return
         if self.min_score and evaluate_password_strength(p1)["score"] < self.min_score:
-            self.err.configure(text="Polityka firmy wymaga silniejszego hasła głównego.")
+            self.err.configure(text=_("Polityka firmy wymaga silniejszego hasła głównego."))
             return
         self.result = p1
         self.destroy()
@@ -161,44 +163,44 @@ class AdminRecoveryTools(ctk.CTkFrame):
 
         c1 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
         c1.pack(fill="x", pady=6, ipady=6)
-        ctk.CTkLabel(c1, text="🔑 Klucz odzyskiwania firmy", font=FONT_SUBTITLE).pack(anchor="w", padx=15, pady=(8, 2))
-        ctk.CTkLabel(c1, text=("Tworzy parę kluczy. Klucz PRYWATNY zapisz w bezpiecznym miejscu (zaszyfrowany hasłem) – "
-                               "bez niego nie odzyskasz dostępu żadnemu pracownikowi. Klucz PUBLICZNY wklej w panelu serwera: "
-                               "Ustawienia → Odzyskiwanie dostępu."),
+        ctk.CTkLabel(c1, text=_("🔑 Klucz odzyskiwania firmy"), font=FONT_SUBTITLE).pack(anchor="w", padx=15, pady=(8, 2))
+        ctk.CTkLabel(c1, text=_("Tworzy parę kluczy. Klucz PRYWATNY zapisz w bezpiecznym miejscu (zaszyfrowany hasłem) – "
+                                "bez niego nie odzyskasz dostępu żadnemu pracownikowi. Klucz PUBLICZNY wklej w panelu serwera: "
+                                "Ustawienia → Odzyskiwanie dostępu."),
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=470, justify="left").pack(anchor="w", padx=15)
-        ctk.CTkButton(c1, text="Utwórz klucz odzyskiwania firmy…", fg_color=COLOR_PRIMARY,
+        ctk.CTkButton(c1, text=_("Utwórz klucz odzyskiwania firmy…"), fg_color=COLOR_PRIMARY,
                       command=self._create_key).pack(anchor="w", padx=15, pady=10)
         self.pub_box = ctk.CTkTextbox(c1, height=70, font=("Consolas", 12))
         self.pub_info = ctk.CTkLabel(c1, text="", font=FONT_SMALL, text_color=COLOR_SUCCESS, wraplength=470, justify="left")
 
         c2 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
         c2.pack(fill="x", pady=6, ipady=6)
-        ctk.CTkLabel(c2, text="🔑 Odzyskaj dostęp użytkownika", font=FONT_SUBTITLE).pack(anchor="w", padx=15, pady=(8, 2))
-        ctk.CTkLabel(c2, text=("1. W panelu serwera (karta użytkownika) pobierz pakiet odzyskiwania.  2. Wybierz go tutaj razem "
-                               "z plikiem klucza firmy.  3. Wgraj w panelu plik wyniku i przekaż użytkownikowi hasło tymczasowe."),
+        ctk.CTkLabel(c2, text=_("🔑 Odzyskaj dostęp użytkownika"), font=FONT_SUBTITLE).pack(anchor="w", padx=15, pady=(8, 2))
+        ctk.CTkLabel(c2, text=_("1. W panelu serwera (karta użytkownika) pobierz pakiet odzyskiwania.  2. Wybierz go tutaj razem "
+                                "z plikiem klucza firmy.  3. Wgraj w panelu plik wyniku i przekaż użytkownikowi hasło tymczasowe."),
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=470, justify="left").pack(anchor="w", padx=15)
-        ctk.CTkButton(c2, text="Odzyskaj dostęp użytkownika…", fg_color=COLOR_PRIMARY,
+        ctk.CTkButton(c2, text=_("Odzyskaj dostęp użytkownika…"), fg_color=COLOR_PRIMARY,
                       command=self._recover_user).pack(anchor="w", padx=15, pady=10)
         self.result_info = ctk.CTkLabel(c2, text="", font=FONT_BODY, text_color=COLOR_TEXT_PRIMARY, wraplength=470,
                                         justify="left")
         self.result_info.pack(anchor="w", padx=15, pady=(0, 6))
 
     def _create_key(self):
-        p1 = PasswordPrompt(self, "Hasło do klucza firmy", "Ustaw hasło chroniące klucz prywatny (min. 12 znaków):").wait()
+        p1 = PasswordPrompt(self, _("Hasło do klucza firmy"), _("Ustaw hasło chroniące klucz prywatny (min. 12 znaków):")).wait()
         if not p1:
             return
-        p2 = PasswordPrompt(self, "Hasło do klucza firmy", "Powtórz hasło:").wait()
+        p2 = PasswordPrompt(self, _("Hasło do klucza firmy"), _("Powtórz hasło:")).wait()
         if p1 != p2:
-            messagebox.showerror("Klucz firmy", "Hasła nie są identyczne.")
+            messagebox.showerror(_("Klucz firmy"), _("Hasła nie są identyczne."))
             return
         try:
             public, key_file = generate_org_keypair(p1)
         except CryptoError as e:
-            messagebox.showerror("Klucz firmy", str(e))
+            messagebox.showerror(_("Klucz firmy"), str(e))
             return
-        path = filedialog.asksaveasfilename(title="Zapisz klucz prywatny odzyskiwania firmy", defaultextension=".ksorgkey",
-                                            initialfile="KeyStead - klucz odzyskiwania firmy.ksorgkey",
-                                            filetypes=[("Klucz odzyskiwania KeyStead", "*.ksorgkey")])
+        path = filedialog.asksaveasfilename(title=_("Zapisz klucz prywatny odzyskiwania firmy"), defaultextension=".ksorgkey",
+                                            initialfile=_("KeyStead - klucz odzyskiwania firmy.ksorgkey"),
+                                            filetypes=[(_("Klucz odzyskiwania KeyStead"), "*.ksorgkey")])
         if not path:
             return
         with open(path, "w", encoding="utf-8") as f:
@@ -206,20 +208,21 @@ class AdminRecoveryTools(ctk.CTkFrame):
         self.pub_box.pack(fill="x", padx=15, pady=(0, 6))
         self.pub_box.delete("1.0", "end")
         self.pub_box.insert("1.0", public)
-        self.pub_info.configure(text=f"✅ Zapisano klucz prywatny. Odcisk klucza: {key_file['key_id']}\n"
-                                     "Skopiuj powyższy klucz publiczny do panelu serwera. Zrób kopię pliku klucza!")
+        self.pub_info.configure(text=_("✅ Zapisano klucz prywatny. Odcisk klucza: {key_id}\n"
+                                       "Skopiuj powyższy klucz publiczny do panelu serwera. Zrób kopię pliku klucza!",
+                                       key_id=key_file["key_id"]))
         self.pub_info.pack(anchor="w", padx=15, pady=(0, 8))
 
     def _recover_user(self):
-        pkg_path = filedialog.askopenfilename(title="Pakiet odzyskiwania z panelu serwera",
-                                              filetypes=[("Pakiet odzyskiwania", "*.ksrecovery"), ("Wszystkie", "*.*")])
+        pkg_path = filedialog.askopenfilename(title=_("Pakiet odzyskiwania z panelu serwera"),
+                                              filetypes=[(_("Pakiet odzyskiwania"), "*.ksrecovery"), (_("Wszystkie pliki"), "*.*")])
         if not pkg_path:
             return
-        key_path = filedialog.askopenfilename(title="Plik klucza odzyskiwania firmy",
-                                              filetypes=[("Klucz odzyskiwania KeyStead", "*.ksorgkey"), ("Wszystkie", "*.*")])
+        key_path = filedialog.askopenfilename(title=_("Plik klucza odzyskiwania firmy"),
+                                              filetypes=[(_("Klucz odzyskiwania KeyStead"), "*.ksorgkey"), (_("Wszystkie pliki"), "*.*")])
         if not key_path:
             return
-        passphrase = PasswordPrompt(self, "Klucz firmy", "Hasło do klucza odzyskiwania firmy:").wait()
+        passphrase = PasswordPrompt(self, _("Klucz firmy"), _("Hasło do klucza odzyskiwania firmy:")).wait()
         if not passphrase:
             return
         try:
@@ -229,25 +232,26 @@ class AdminRecoveryTools(ctk.CTkFrame):
                 key_file = json.load(f)
             result, temp_password = build_recovery_result(package, key_file, passphrase)
         except (OSError, ValueError, KeyError, CryptoError) as e:
-            messagebox.showerror("Odzyskiwanie dostępu", str(e))
+            messagebox.showerror(_("Odzyskiwanie dostępu"), str(e))
             return
-        out = filedialog.asksaveasfilename(title="Zapisz wynik do wgrania w panelu", defaultextension=".ksreset",
-                                           initialfile=f"wynik-{package.get('user', 'uzytkownik')}.ksreset",
-                                           filetypes=[("Wynik odzyskiwania", "*.ksreset")])
+        out = filedialog.asksaveasfilename(title=_("Zapisz wynik do wgrania w panelu"), defaultextension=".ksreset",
+                                           initialfile=_("wynik-{user}.ksreset", user=package.get("user", _("uzytkownik"))),
+                                           filetypes=[(_("Wynik odzyskiwania"), "*.ksreset")])
         if not out:
             return
         with open(out, "w", encoding="utf-8") as f:
             json.dump(result, f)
-        self.result_info.configure(text=(f"✅ Gotowe dla: {package.get('display_name') or package.get('user')}\n"
-                                         f"Hasło tymczasowe:  {temp_password}\n"
-                                         "Wgraj plik wyniku w panelu serwera i przekaż hasło użytkownikowi (np. telefonicznie). "
-                                         "Przy odblokowaniu aplikacja wymusi ustawienie nowego hasła."))
+        self.result_info.configure(text=_("✅ Gotowe dla: {user}\n"
+                                          "Hasło tymczasowe:  {password}\n"
+                                          "Wgraj plik wyniku w panelu serwera i przekaż hasło użytkownikowi (np. telefonicznie). "
+                                          "Przy odblokowaniu aplikacja wymusi ustawienie nowego hasła.",
+                                          user=package.get("display_name") or package.get("user"), password=temp_password))
 
 
 def build_recovery_result(package: dict, key_file: dict, passphrase: str):
     """Pakiet z panelu + klucz firmy → (wynik do wgrania w panelu, hasło tymczasowe)."""
     if package.get("type") != "keystead-recovery-package":
-        raise CryptoError("To nie jest pakiet odzyskiwania z panelu KeyStead.")
+        raise CryptoError(_("To nie jest pakiet odzyskiwania z panelu KeyStead."))
     private = load_org_private_key(key_file, passphrase)
     plaintext, ring = unseal_with_org_key(base64.b64decode(package["blob"], validate=True), private)
     data = json.loads(plaintext.decode("utf-8"))

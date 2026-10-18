@@ -12,6 +12,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 from backups.base import BaseBackupProvider, BackupStatus
 from core.crypto import compute_sha256
+from core.i18n import _
 
 
 class WebDAVBackupProvider(BaseBackupProvider):
@@ -51,7 +52,7 @@ class WebDAVBackupProvider(BaseBackupProvider):
         if scheme == "https":
             return True, ""
         if scheme != "http" or not parsed.hostname:
-            return False, "Adres WebDAV musi zaczynać się od https://"
+            return False, _("Adres WebDAV musi zaczynać się od https://")
         host = parsed.hostname.lower()
         is_local = host in ("localhost",) or host.endswith((".local", ".lan", ".home.arpa"))
         try:
@@ -60,14 +61,14 @@ class WebDAVBackupProvider(BaseBackupProvider):
         except ValueError:
             pass
         if not is_local:
-            return False, ("Połączenie http:// przez internet wysłałoby login i hasło WebDAV otwartym tekstem. "
-                           "Użyj adresu https://")
-        return True, "⚠️ Połączenie bez szyfrowania (http://) – dopuszczalne tylko w zaufanej sieci domowej."
+            return False, _("Połączenie http:// przez internet wysłałoby login i hasło WebDAV otwartym tekstem. "
+                             "Użyj adresu https://")
+        return True, _("⚠️ Połączenie bez szyfrowania (http://) – dopuszczalne tylko w zaufanej sieci domowej.")
 
     def test_connection(self, config: Dict[str, Any]) -> Tuple[bool, str]:
         url = config.get("url", "").strip()
         if not url:
-            return False, "Brak podanego adresu URL serwera WebDAV."
+            return False, _("Brak podanego adresu URL serwera WebDAV.")
         allowed, warning = self.check_transport(url)
         if not allowed:
             return False, warning
@@ -77,19 +78,19 @@ class WebDAVBackupProvider(BaseBackupProvider):
             # Wysłanie żądania PROPFIND lub OPTIONS w celu weryfikacji serwera
             resp = requests.request("PROPFIND", url, auth=auth, headers={"Depth": "0"}, timeout=10)
             if resp.status_code in [200, 207]:
-                return True, f"Połączenie z serwerem WebDAV udane! (Kod: {resp.status_code})" + (f"\n\n{warning}" if warning else "")
+                return True, _("Połączenie z serwerem WebDAV udane! (Kod: {code})", code=resp.status_code) + (f"\n\n{warning}" if warning else "")
             elif resp.status_code == 401:
-                return False, "Błąd uwierzytelnienia: Niepoprawny login lub hasło/token aplikacji."
+                return False, _("Błąd uwierzytelnienia: Niepoprawny login lub hasło/token aplikacji.")
             elif resp.status_code == 404:
                 # Niektóre serwery mogą nie mieć ścieżki głównej, spróbujmy OPTIONS
                 opt_resp = requests.options(url, auth=auth, timeout=10)
                 if opt_resp.status_code in [200, 204]:
-                    return True, "Połączenie z serwerem WebDAV udane (OPTIONS)."
-                return False, f"Zasób nie został odnaleziony (404): {url}"
+                    return True, _("Połączenie z serwerem WebDAV udane (OPTIONS).")
+                return False, _("Zasób nie został odnaleziony (404): {url}", url=url)
             else:
-                return False, f"Serwer zwrócił status {resp.status_code}: {resp.reason}"
+                return False, _("Serwer zwrócił status {code}: {reason}", code=resp.status_code, reason=resp.reason)
         except Exception as e:
-            return False, f"Nie można połączyć się z serwerem WebDAV: {str(e)}"
+            return False, _("Nie można połączyć się z serwerem WebDAV: {error}", error=e)
 
     def upload_backup(
         self,
@@ -98,14 +99,14 @@ class WebDAVBackupProvider(BaseBackupProvider):
         custom_filename: Optional[str] = None
     ) -> BackupStatus:
         if not os.path.exists(vault_file_path):
-            return BackupStatus(self.name, False, error_message="Plik źródłowy sejfu nie istnieje.")
+            return BackupStatus(self.name, False, error_message=_("Plik źródłowy sejfu nie istnieje."))
 
         base_url = config.get("url", "").strip()
         remote_folder = config.get("remote_folder", "KeyStead-Backups").strip("/")
         auth = self._get_auth(config)
 
         if not base_url:
-            return BackupStatus(self.name, False, error_message="Brak adresu URL WebDAV w konfiguracji.")
+            return BackupStatus(self.name, False, error_message=_("Brak adresu URL WebDAV w konfiguracji."))
         allowed, warning = self.check_transport(base_url)
         if not allowed:
             return BackupStatus(self.name, False, error_message=warning)
@@ -146,8 +147,8 @@ class WebDAVBackupProvider(BaseBackupProvider):
                     self.name,
                     False,
                     destination_path=target_url,
-                    error_message=f"Błąd WebDAV ({put_resp.status_code}): {put_resp.reason}"
+                    error_message=_("Błąd WebDAV ({code}): {reason}", code=put_resp.status_code, reason=put_resp.reason)
                 )
 
         except Exception as e:
-            return BackupStatus(self.name, False, error_message=f"Nieudane wysyłanie na WebDAV: {str(e)}")
+            return BackupStatus(self.name, False, error_message=_("Nieudane wysyłanie na WebDAV: {error}", error=e))

@@ -10,8 +10,9 @@ from unittest import mock
 
 from core import browser_url, winsys
 from core.vault import Vault, VaultEntry
-from ui.quick_access import (ADDRESSES_FIELD, AutotypeAborted, QuickAccess, autotype_matches, browser_matches,
-                             entry_allowed_on, parse_sequence, perform_autotype, single_best_match, _site_label)
+from ui.quick_access import (ADDRESSES_FIELD, SEQUENCE_FIELD, AutotypeAborted, QuickAccess, autotype_matches,
+                             browser_matches, entry_allowed_on, entry_sequence, parse_sequence, perform_autotype,
+                             single_best_match, _site_label)
 
 
 def vault_with(*entries):
@@ -147,6 +148,18 @@ class TestBrowserAddress(unittest.TestCase):
         self.assertEqual(browser_matches(v, "mbank-logowanie.xyz"), [])
         self.assertIs(entry_allowed_on(bank, "mbank-logowanie.xyz"), False)
         self.assertIsNone(entry_allowed_on(nourl, "cokolwiek.pl"))
+
+    def test_english_field_aliases(self):
+        e = VaultEntry(title="Intranet", username="u", password="p", url="https://intranet.firma.pl",
+                       custom_fields={"Autotype addresses": "sso.firma.pl", "Autotype window": "Portal SSO",
+                                      "Autotype sequence": "{PASSWORD}{ENTER}"})
+        v = vault_with(e)
+        self.assertEqual(single_best_match(browser_matches(v, "sso.firma.pl")), e)
+        self.assertEqual(single_best_match(autotype_matches(v, "Portal SSO - Chrome")), e)
+        self.assertEqual(entry_sequence(e), "{PASSWORD}{ENTER}")
+        # nazwa polska ma pierwszeństwo przed angielską
+        e.custom_fields[SEQUENCE_FIELD] = "{USERNAME}{ENTER}"
+        self.assertEqual(entry_sequence(e), "{USERNAME}{ENTER}")
 
     def test_exact_address_beats_parent_domain(self):
         a = VaultEntry(title="Google", username="a", password="p", url="https://google.com")

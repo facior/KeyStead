@@ -12,6 +12,7 @@ import requests
 from backups.base import BaseBackupProvider, BackupStatus
 from backups import oauth
 from core.crypto import compute_sha256
+from core.i18n import _
 
 DRIVE = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id"
@@ -22,7 +23,7 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 class GoogleDriveBackupProvider(BaseBackupProvider):
     @property
     def name(self) -> str:
-        return "Dysk Google"
+        return _("Dysk Google")
 
     @property
     def key(self) -> str:
@@ -35,8 +36,8 @@ class GoogleDriveBackupProvider(BaseBackupProvider):
         resp = requests.get(f"{DRIVE}/about?fields=user", headers={"Authorization": f"Bearer {token}"}, timeout=10)
         if resp.status_code == 200:
             user = resp.json().get("user", {})
-            return user.get("emailAddress") or user.get("displayName") or "Konto Google"
-        return "Konto Google"
+            return user.get("emailAddress") or user.get("displayName") or _("Konto Google")
+        return _("Konto Google")
 
     def test_connection(self, config: Dict[str, Any]) -> Tuple[bool, str]:
         folder_path = config.get("folder_path", "").strip()
@@ -50,19 +51,19 @@ class GoogleDriveBackupProvider(BaseBackupProvider):
                 resp = requests.get(f"{DRIVE}/about?fields=user", headers={"Authorization": f"Bearer {token}"}, timeout=10)
                 if resp.status_code == 200:
                     user = resp.json().get("user", {})
-                    return True, f"Połączono z Dyskiem Google ({user.get('emailAddress', 'konto Google')})."
+                    return True, _("Połączono z Dyskiem Google ({account}).", account=user.get('emailAddress') or _('konto Google'))
                 if resp.status_code == 401:
-                    return False, "Sesja Google wygasła – zaloguj się ponownie."
-                return False, f"Błąd Google Drive API: {resp.status_code}"
+                    return False, _("Sesja Google wygasła – zaloguj się ponownie.")
+                return False, _("Błąd Google Drive API: {code}", code=resp.status_code)
             except requests.RequestException as e:
-                return False, f"Błąd połączenia z Google Drive API: {e}"
+                return False, _("Błąd połączenia z Google Drive API: {error}", error=e)
 
         if folder_path:
             if os.path.isdir(folder_path):
-                return True, f"Folder Google Drive dostępny: {folder_path}"
-            return False, f"Ścieżka do folderu Google Drive nie istnieje: {folder_path}"
+                return True, _("Folder Google Drive dostępny: {folder}", folder=folder_path)
+            return False, _("Ścieżka do folderu Google Drive nie istnieje: {folder}", folder=folder_path)
 
-        return False, "Zaloguj się kontem Google lub wybierz folder Google Drive."
+        return False, _("Zaloguj się kontem Google lub wybierz folder Google Drive.")
 
     def upload_backup(
         self,
@@ -71,7 +72,7 @@ class GoogleDriveBackupProvider(BaseBackupProvider):
         custom_filename: Optional[str] = None
     ) -> BackupStatus:
         if not os.path.exists(vault_file_path):
-            return BackupStatus(self.name, False, error_message="Plik źródłowy sejfu nie istnieje.")
+            return BackupStatus(self.name, False, error_message=_("Plik źródłowy sejfu nie istnieje."))
 
         with open(vault_file_path, "rb") as f:
             data = f.read()
@@ -91,7 +92,7 @@ class GoogleDriveBackupProvider(BaseBackupProvider):
             return self._upload_via_api(data, filename, token, sha256_sum, config)
         if folder_path:
             return self._upload_via_folder(data, filename, folder_path, sha256_sum)
-        return BackupStatus(self.name, False, error_message="Brak konfiguracji Google Drive.")
+        return BackupStatus(self.name, False, error_message=_("Brak konfiguracji Google Drive."))
 
     def _get_or_create_folder(self, token: str, config: Dict[str, Any]) -> Optional[str]:
         """Zwraca ID folderu kopii na Dysku (tworzy go przy pierwszym użyciu)."""
@@ -133,10 +134,10 @@ class GoogleDriveBackupProvider(BaseBackupProvider):
 
             if resp.status_code in (200, 201):
                 where = f"/{REMOTE_FOLDER}/{filename}" if folder_id else filename
-                return BackupStatus(self.name, True, destination_path=f"Dysk Google: {where}", checksum=sha256_sum, size_bytes=len(data))
-            return BackupStatus(self.name, False, error_message=f"Błąd Google Drive API ({resp.status_code}): {resp.text[:300]}")
+                return BackupStatus(self.name, True, destination_path=_("Dysk Google: {path}", path=where), checksum=sha256_sum, size_bytes=len(data))
+            return BackupStatus(self.name, False, error_message=_("Błąd Google Drive API ({code}): {details}", code=resp.status_code, details=resp.text[:300]))
         except requests.RequestException as e:
-            return BackupStatus(self.name, False, error_message=f"Błąd wysyłania do Google Drive API: {e}")
+            return BackupStatus(self.name, False, error_message=_("Błąd wysyłania do Google Drive API: {error}", error=e))
 
     def _upload_via_folder(self, data: bytes, filename: str, folder_path: str, sha256_sum: str) -> BackupStatus:
         try:
@@ -149,4 +150,4 @@ class GoogleDriveBackupProvider(BaseBackupProvider):
                 os.fsync(f.fileno())
             return BackupStatus(self.name, True, destination_path=target, checksum=sha256_sum, size_bytes=len(data))
         except OSError as e:
-            return BackupStatus(self.name, False, error_message=f"Błąd zapisu do folderu Google Drive: {e}")
+            return BackupStatus(self.name, False, error_message=_("Błąd zapisu do folderu Google Drive: {error}", error=e))

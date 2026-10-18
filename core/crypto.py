@@ -10,6 +10,8 @@ from typing import Optional, Tuple
 import argon2.low_level as argon_low
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from core.i18n import _
+
 MAGIC_HEADER = b"SECVAULT"
 CURRENT_VERSION = 1
 
@@ -39,6 +41,11 @@ class InvalidVaultHeaderError(CryptoError):
 
 class InvalidPasswordOrCorruptDataError(CryptoError):
     """Błędne hasło główne lub uszkodzone/zmodyfikowane dane sejfu."""
+    pass
+
+
+class YubiKeyRequiredError(CryptoError):
+    """Sejf wymaga YubiKey, a nie udało się uzyskać jego odpowiedzi (brak klucza, brak dotknięcia, zły slot)."""
     pass
 
 
@@ -99,7 +106,7 @@ def encrypt_payload(
     """
     if keyfile_bytes is not None and len(keyfile_bytes) == 0:
         # Pusty plik-klucz nic nie dodaje do bezpieczeństwa – użytkownik myślałby, że ma drugi składnik
-        raise CryptoError("Wybrany plik-klucz jest pusty – wybierz inny plik (np. wygeneruj nowy plik-klucz).")
+        raise CryptoError(_("Wybrany plik-klucz jest pusty – wybierz inny plik (np. wygeneruj nowy plik-klucz)."))
     salt = os.urandom(SALT_LEN)
     nonce = os.urandom(NONCE_LEN)
 
@@ -140,18 +147,18 @@ def decrypt_payload(
         return unseal(encrypted_blob, password, keyfile_bytes)[0]
     min_header_len = len(MAGIC_HEADER) + 1 + 12 + SALT_LEN + NONCE_LEN
     if len(encrypted_blob) < min_header_len + 16:  # 16 bajtów to minimalny tag GCM
-        raise InvalidVaultHeaderError("Plik jest za mały lub uszkodzony.")
+        raise InvalidVaultHeaderError(_("Plik jest za mały lub uszkodzony."))
 
     magic = encrypted_blob[:len(MAGIC_HEADER)]
     if magic != MAGIC_HEADER:
-        raise InvalidVaultHeaderError("Nieprawidłowy nagłówek pliku sejfu (brak podpisu SECVAULT).")
+        raise InvalidVaultHeaderError(_("Nieprawidłowy nagłówek pliku sejfu (brak podpisu SECVAULT)."))
 
     offset = len(MAGIC_HEADER)
     version, time_cost, memory_cost, parallelism = struct.unpack(">BIII", encrypted_blob[offset:offset + 13])
     offset += 13
 
     if version != CURRENT_VERSION:
-        raise InvalidVaultHeaderError(f"Nieobsługiwana wersja sejfu: {version}")
+        raise InvalidVaultHeaderError(_("Nieobsługiwana wersja sejfu: {version}", version=version))
 
     # Parametry KDF są czytane PRZED weryfikacją tagu GCM – spreparowany plik mógłby
     # zażądać gigabajtów RAM lub miliardów iteracji (DoS) albo osłabionych parametrów.
@@ -159,8 +166,8 @@ def decrypt_payload(
             and MIN_MEMORY_COST <= memory_cost <= MAX_MEMORY_COST
             and 1 <= parallelism <= MAX_PARALLELISM):
         raise InvalidVaultHeaderError(
-            f"Nieprawidłowe parametry Argon2 w nagłówku (t={time_cost}, m={memory_cost} KiB, p={parallelism}). "
-            "Plik jest uszkodzony lub został zmodyfikowany."
+            _("Nieprawidłowe parametry Argon2 w nagłówku (t={t}, m={m} KiB, p={p}). "
+              "Plik jest uszkodzony lub został zmodyfikowany.", t=time_cost, m=memory_cost, p=parallelism)
         )
 
     salt = encrypted_blob[offset:offset + SALT_LEN]
@@ -186,7 +193,7 @@ def decrypt_payload(
         plaintext = aesgcm.decrypt(nonce, ciphertext, header_aad)
         return plaintext
     except Exception as e:
-        raise InvalidPasswordOrCorruptDataError("Nieprawidłowe hasło główne (bądź klucz) lub plik został uszkodzony.") from e
+        raise InvalidPasswordOrCorruptDataError(_("Nieprawidłowe hasło główne (bądź klucz) lub plik został uszkodzony.")) from e
 
 
 # =====================================================================================================
@@ -242,7 +249,7 @@ def _wrap(kek: bytes, dek: bytes, label: str) -> Dict[str, str]:
 def _unwrap(kek: bytes, slot: Dict[str, Any], label: str) -> bytes:
     dek = AESGCM(kek).decrypt(_d(slot["nonce"]), _d(slot["wrapped"]), f"keystead-slot:{label}".encode())
     if len(dek) != KEY_LEN:
-        raise InvalidPasswordOrCorruptDataError("Nieprawidłowy klucz danych.")
+        raise InvalidPasswordOrCorruptDataError(_("Nieprawidłowy klucz danych."))
     return dek
 
 
@@ -256,11 +263,62 @@ def _kdf_from_slot(slot: Dict[str, Any], secret: str, keyfile: Optional[bytes]) 
     kdf = slot.get("kdf") or {}
     t, m, p = int(kdf.get("t", 0)), int(kdf.get("m", 0)), int(kdf.get("p", 0))
     if not (MIN_TIME_COST <= t <= MAX_TIME_COST and MIN_MEMORY_COST <= m <= MAX_MEMORY_COST and 1 <= p <= MAX_PARALLELISM):
-        raise InvalidVaultHeaderError("Nieprawidłowe parametry Argon2 w kluczu dostępu – plik uszkodzony lub zmodyfikowany.")
+        raise InvalidVaultHeaderError(_("Nieprawidłowe parametry Argon2 w kluczu dostępu – plik uszkodzony lub zmodyfikowany."))
     salt = _d(kdf["salt"])
     if len(salt) != SALT_LEN:
-        raise InvalidVaultHeaderError("Nieprawidłowa sól klucza dostępu.")
+        raise InvalidVaultHeaderError(_("Nieprawidłowa sól klucza dostępu."))
     return derive_key(secret, salt, keyfile, t, m, p)
+
+
+# --------------------------------------------------------------------- YubiKey (challenge-response HMAC-SHA1)
+# Klucz dostępu „hasło” może mieć pole "yubikey": {"challenge": base64, "slot": 1|2}. Odpowiedź YubiKey na to
+# wyzwanie jest wtedy drugim składnikiem (jak plik-klucz) – bez niej Argon2id daje inny klucz.
+YUBIKEY_LABEL = b"\x00keystead-yubikey-v1\x00"
+
+
+def _with_yubikey(keyfile: Optional[bytes], response: bytes) -> bytes:
+    return (keyfile or b"") + YUBIKEY_LABEL + response
+
+
+def _slot_yubikey(slot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    info = slot.get("yubikey")
+    if info is None:
+        return None
+    try:
+        challenge = _d(info["challenge"])
+        number = int(info.get("slot", 2))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise InvalidVaultHeaderError(_("Uszkodzone ustawienia YubiKey w nagłówku sejfu."))
+    if not 16 <= len(challenge) <= 63 or number not in (1, 2):
+        raise InvalidVaultHeaderError(_("Uszkodzone ustawienia YubiKey w nagłówku sejfu."))
+    return {"challenge": info["challenge"], "slot": number}
+
+
+def _yubikey_response(info: Dict[str, Any]) -> bytes:
+    from core import yubikey
+    challenge, slot = _d(info["challenge"]), int(info["slot"])
+    known = yubikey.cached(challenge, slot)
+    if known is not None:
+        return known
+    try:
+        return yubikey.respond(challenge, slot)
+    except yubikey.YubiKeyError as e:
+        raise YubiKeyRequiredError(str(e)) from e
+
+
+def _yubikey_worked(info: Dict[str, Any], response: bytes) -> None:
+    """Odpowiedź otworzyła sejf – zapamiętaj ją do końca sesji (synchronizacja bez ponownego dotyku)."""
+    from core import yubikey
+    yubikey.remember(_d(info["challenge"]), int(info["slot"]), response)
+
+
+def password_yubikey(blob: bytes) -> Optional[Dict[str, Any]]:
+    """Ustawienia YubiKey sejfu (z nagłówka, bez odszyfrowania) albo None – np. by przed otwarciem poprosić o klucz."""
+    if blob_version(blob) != VERSION_V2:
+        return None
+    slots = _parse_v2(blob)[0]
+    slot = next((s for s in slots if s.get("type") == "password"), None)
+    return _slot_yubikey(slot) if slot else None
 
 
 def normalize_recovery_code(code: str) -> str:
@@ -268,7 +326,7 @@ def normalize_recovery_code(code: str) -> str:
 
 
 def generate_recovery_code() -> str:
-    raw = "".join(_secrets.choice(RECOVERY_ALPHABET) for _ in range(RECOVERY_GROUPS * RECOVERY_GROUP_LEN))
+    raw = "".join(_secrets.choice(RECOVERY_ALPHABET) for __ in range(RECOVERY_GROUPS * RECOVERY_GROUP_LEN))
     return "-".join(raw[i:i + RECOVERY_GROUP_LEN] for i in range(0, len(raw), RECOVERY_GROUP_LEN))
 
 
@@ -282,13 +340,13 @@ def org_key_id(public_raw: bytes) -> str:
 def parse_org_public_key(text: str) -> bytes:
     text = (text or "").strip()
     if not text.startswith(ORG_PUBLIC_PREFIX):
-        raise CryptoError("To nie jest klucz publiczny odzyskiwania KeyStead (powinien zaczynać się od 'ksrec1:').")
+        raise CryptoError(_("To nie jest klucz publiczny odzyskiwania KeyStead (powinien zaczynać się od 'ksrec1:')."))
     try:
         raw = _d(text[len(ORG_PUBLIC_PREFIX):])
     except ValueError:
-        raise CryptoError("Uszkodzony klucz publiczny odzyskiwania.")
+        raise CryptoError(_("Uszkodzony klucz publiczny odzyskiwania."))
     if len(raw) != 32:
-        raise CryptoError("Uszkodzony klucz publiczny odzyskiwania.")
+        raise CryptoError(_("Uszkodzony klucz publiczny odzyskiwania."))
     return raw
 
 
@@ -298,7 +356,7 @@ def generate_org_keypair(passphrase: str) -> Tuple[str, Dict[str, Any]]:
     plik klucza prywatnego zabezpieczony hasłem – przechowywany przez administratora poza serwerem).
     """
     if len(passphrase or "") < 12:
-        raise CryptoError("Hasło do klucza odzyskiwania firmy musi mieć co najmniej 12 znaków.")
+        raise CryptoError(_("Hasło do klucza odzyskiwania firmy musi mieć co najmniej 12 znaków."))
     private = X25519PrivateKey.generate()
     priv_raw = private.private_bytes(_ser.Encoding.Raw, _ser.PrivateFormat.Raw, _ser.NoEncryption())
     pub_raw = private.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
@@ -314,12 +372,12 @@ def generate_org_keypair(passphrase: str) -> Tuple[str, Dict[str, Any]]:
 
 def load_org_private_key(key_file: Dict[str, Any], passphrase: str) -> X25519PrivateKey:
     if key_file.get("type") != "keystead-org-recovery-key":
-        raise CryptoError("To nie jest plik klucza odzyskiwania firmy KeyStead.")
+        raise CryptoError(_("To nie jest plik klucza odzyskiwania firmy KeyStead."))
     kek = _kdf_from_slot(key_file, passphrase, None)
     try:
         raw = AESGCM(kek).decrypt(_d(key_file["nonce"]), _d(key_file["private"]), b"keystead-org-private")
     except Exception:
-        raise InvalidPasswordOrCorruptDataError("Nieprawidłowe hasło do klucza odzyskiwania firmy.")
+        raise InvalidPasswordOrCorruptDataError(_("Nieprawidłowe hasło do klucza odzyskiwania firmy."))
     return X25519PrivateKey.from_private_bytes(raw)
 
 
@@ -336,6 +394,9 @@ class Keyring:
         self.dek = dek
         self.slots = slots
         self._marker = password_marker
+        self._yk_response: Optional[bytes] = None  # odpowiedź YubiKey z otwarcia – zmiana hasła bez ponownego dotyku
+        # Sejf otwarty kodem odzyskiwania lub kluczem firmy: YubiKey mógł zginąć – nowe hasło będzie już bez niego
+        self.drop_yubikey_on_password_change = False
 
     # --- znacznik hasła: wykrycie zmiany hasła bez ponownego liczenia Argon2
     def _password_marker(self, password: str, keyfile: Optional[bytes]) -> bytes:
@@ -356,11 +417,42 @@ class Keyring:
         if slot is not None:
             self.slots.append(slot)
 
+    @property
+    def yubikey(self) -> Optional[Dict[str, Any]]:
+        slot = next((s for s in self.slots if s.get("type") == "password"), None)
+        return _slot_yubikey(slot) if slot else None
+
     def set_password(self, password: str, keyfile: Optional[bytes] = None) -> None:
+        info = None if self.drop_yubikey_on_password_change else self.yubikey
+        response = None
+        if info is not None:
+            response = self._yk_response or _yubikey_response(info)
+        self._write_password_slot(password, keyfile, info, response)
+        self.drop_yubikey_on_password_change = False
+
+    def enable_yubikey(self, password: str, keyfile: Optional[bytes], challenge: bytes, response: bytes,
+                       slot: int = 2) -> None:
+        """Wiąże klucz dostępu „hasło” z YubiKey (odpowiedź na `challenge` policzona przez wywołującego)."""
+        if not 16 <= len(challenge) <= 63 or len(response) != 20 or slot not in (1, 2):
+            raise CryptoError(_("Nieprawidłowa odpowiedź YubiKey."))
+        self._write_password_slot(password, keyfile, {"challenge": _e(challenge), "slot": slot}, response)
+
+    def disable_yubikey(self, password: str, keyfile: Optional[bytes]) -> None:
+        self._write_password_slot(password, keyfile, None, None)
+
+    def _write_password_slot(self, password: str, keyfile: Optional[bytes], info: Optional[Dict[str, Any]],
+                             response: Optional[bytes]) -> None:
         if keyfile is not None and len(keyfile) == 0:
-            raise CryptoError("Wybrany plik-klucz jest pusty – wybierz inny plik.")
-        meta, kek = _kdf_slot(password, keyfile)
-        self._replace("password", {"type": "password", **meta, **_wrap(kek, self.dek, "password")})
+            raise CryptoError(_("Wybrany plik-klucz jest pusty – wybierz inny plik."))
+        effective = _with_yubikey(keyfile, response) if info is not None else keyfile
+        meta, kek = _kdf_slot(password, effective)
+        slot = {"type": "password", **meta, **_wrap(kek, self.dek, "password")}
+        if info is not None:
+            slot["yubikey"] = info
+        self._replace("password", slot)
+        self._yk_response = response
+        # Znacznik liczony z hasła i pliku-klucza BEZ odpowiedzi YubiKey – aplikacja przekazuje przy zapisie
+        # te same dane co przy otwarciu, a odpowiedź pamięta pęk kluczy
         self._marker = self._password_marker(password, keyfile)
 
     def add_recovery_code(self) -> str:
@@ -395,7 +487,7 @@ class Keyring:
 
     def encrypt(self, plaintext: bytes) -> bytes:
         if not any(s.get("type") == "password" for s in self.slots):
-            raise CryptoError("Brak klucza dostępu „hasło” – nie można zapisać sejfu.")
+            raise CryptoError(_("Brak klucza dostępu „hasło” – nie można zapisać sejfu."))
         header = _json.dumps({"slots": self.slots}, separators=(",", ":")).encode("utf-8")
         nonce = os.urandom(NONCE_LEN)
         prefix = MAGIC_HEADER + struct.pack(">BI", VERSION_V2, len(header)) + header + nonce
@@ -405,18 +497,18 @@ class Keyring:
 def _parse_v2(blob: bytes):
     offset = len(MAGIC_HEADER)
     if len(blob) < offset + 5:
-        raise InvalidVaultHeaderError("Plik jest za mały lub uszkodzony.")
+        raise InvalidVaultHeaderError(_("Plik jest za mały lub uszkodzony."))
     version, header_len = struct.unpack(">BI", blob[offset:offset + 5])
     offset += 5
     if version != VERSION_V2 or header_len > MAX_HEADER_BYTES or len(blob) < offset + header_len + NONCE_LEN + 16:
-        raise InvalidVaultHeaderError("Nieprawidłowy nagłówek sejfu (v2).")
+        raise InvalidVaultHeaderError(_("Nieprawidłowy nagłówek sejfu (v2)."))
     try:
         header = _json.loads(blob[offset:offset + header_len].decode("utf-8"))
         slots = header["slots"]
         if not isinstance(slots, list) or not all(isinstance(s, dict) for s in slots):
             raise ValueError
     except (ValueError, KeyError, UnicodeDecodeError):
-        raise InvalidVaultHeaderError("Uszkodzony nagłówek sejfu (v2).")
+        raise InvalidVaultHeaderError(_("Uszkodzony nagłówek sejfu (v2)."))
     offset += header_len
     nonce = blob[offset:offset + NONCE_LEN]
     offset += NONCE_LEN
@@ -429,7 +521,7 @@ def _open_v2(blob: bytes, dek_from_slots) -> Tuple[bytes, Keyring]:
     try:
         plaintext = AESGCM(dek).decrypt(nonce, ciphertext, aad)
     except Exception as e:
-        raise InvalidPasswordOrCorruptDataError("Plik sejfu jest uszkodzony lub został zmodyfikowany.") from e
+        raise InvalidPasswordOrCorruptDataError(_("Plik sejfu jest uszkodzony lub został zmodyfikowany.")) from e
     return plaintext, Keyring(dek, slots)
 
 
@@ -437,10 +529,10 @@ def _slot(slots, slot_type: str) -> Dict[str, Any]:
     slot = next((s for s in slots if s.get("type") == slot_type), None)
     if slot is None:
         raise InvalidPasswordOrCorruptDataError({
-            "password": "Plik sejfu nie zawiera klucza dostępu hasłem.",
-            "recovery": "Ten sejf nie ma ustawionego kodu odzyskiwania.",
-            "org": "Ten sejf nie ma włączonego odzyskiwania przez firmę.",
-        }.get(slot_type, "Brak klucza dostępu."))
+            "password": _("Plik sejfu nie zawiera klucza dostępu hasłem."),
+            "recovery": _("Ten sejf nie ma ustawionego kodu odzyskiwania."),
+            "org": _("Ten sejf nie ma włączonego odzyskiwania przez firmę."),
+        }.get(slot_type, _("Brak klucza dostępu.")))
     return slot
 
 
@@ -449,24 +541,38 @@ def unseal(blob: bytes, password: str, keyfile: Optional[bytes] = None) -> Tuple
     if blob_version(blob) != VERSION_V2:
         return decrypt_payload(blob, password, keyfile), None
 
+    used = {"response": None}
+
     def _dek(slots):
         slot = _slot(slots, "password")
-        kek = _kdf_from_slot(slot, password, keyfile)
+        info = _slot_yubikey(slot)
+        effective = keyfile
+        if info is not None:
+            used["response"] = _yubikey_response(info)  # może czekać na dotknięcie klucza
+            effective = _with_yubikey(keyfile, used["response"])
+        kek = _kdf_from_slot(slot, password, effective)
         try:
-            return _unwrap(kek, slot, "password")
+            dek = _unwrap(kek, slot, "password")
         except InvalidPasswordOrCorruptDataError:
             raise
         except Exception as e:
-            raise InvalidPasswordOrCorruptDataError("Nieprawidłowe hasło główne (bądź klucz) lub plik został uszkodzony.") from e
+            if info is not None:
+                raise InvalidPasswordOrCorruptDataError(
+                    _("Nieprawidłowe hasło główne albo inny YubiKey niż ten, którym zabezpieczono sejf.")) from e
+            raise InvalidPasswordOrCorruptDataError(_("Nieprawidłowe hasło główne (bądź klucz) lub plik został uszkodzony.")) from e
+        if info is not None:
+            _yubikey_worked(info, used["response"])
+        return dek
 
     plaintext, ring = _open_v2(blob, _dek)
     ring._marker = ring._password_marker(password, keyfile)
+    ring._yk_response = used["response"]
     return plaintext, ring
 
 
 def unseal_with_recovery_code(blob: bytes, code: str) -> Tuple[bytes, Keyring]:
     if blob_version(blob) != VERSION_V2:
-        raise InvalidPasswordOrCorruptDataError("Ten sejf nie ma ustawionego kodu odzyskiwania.")
+        raise InvalidPasswordOrCorruptDataError(_("Ten sejf nie ma ustawionego kodu odzyskiwania."))
 
     def _dek(slots):
         slot = _slot(slots, "recovery")
@@ -475,27 +581,32 @@ def unseal_with_recovery_code(blob: bytes, code: str) -> Tuple[bytes, Keyring]:
         except InvalidPasswordOrCorruptDataError:
             raise
         except Exception as e:
-            raise InvalidPasswordOrCorruptDataError("Nieprawidłowy kod odzyskiwania.") from e
-    return _open_v2(blob, _dek)
+            raise InvalidPasswordOrCorruptDataError(_("Nieprawidłowy kod odzyskiwania.")) from e
+    plaintext, ring = _open_v2(blob, _dek)
+    ring.drop_yubikey_on_password_change = True
+    return plaintext, ring
 
 
 def unseal_with_org_key(blob: bytes, private_key: X25519PrivateKey) -> Tuple[bytes, Keyring]:
     if blob_version(blob) != VERSION_V2:
-        raise InvalidPasswordOrCorruptDataError("Ten sejf nie ma włączonego odzyskiwania przez firmę.")
+        raise InvalidPasswordOrCorruptDataError(_("Ten sejf nie ma włączonego odzyskiwania przez firmę."))
     pub = private_key.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
 
     def _dek(slots):
         slot = _slot(slots, "org")
         if slot.get("key_id") != org_key_id(pub):
             raise InvalidPasswordOrCorruptDataError(
-                f"Sejf jest zabezpieczony innym kluczem firmy ({slot.get('key_id')}) niż wczytany ({org_key_id(pub)}).")
+                _("Sejf jest zabezpieczony innym kluczem firmy ({vault_key}) niż wczytany ({loaded_key}).",
+                  vault_key=slot.get('key_id'), loaded_key=org_key_id(pub)))
         eph_pub = _d(slot["eph"])
         kek = _org_kek(private_key.exchange(X25519PublicKey.from_public_bytes(eph_pub)), eph_pub, pub)
         try:
             return _unwrap(kek, slot, "org")
         except Exception as e:
-            raise InvalidPasswordOrCorruptDataError("Nie udało się odszyfrować klucza danych kluczem firmy.") from e
-    return _open_v2(blob, _dek)
+            raise InvalidPasswordOrCorruptDataError(_("Nie udało się odszyfrować klucza danych kluczem firmy.")) from e
+    plaintext, ring = _open_v2(blob, _dek)
+    ring.drop_yubikey_on_password_change = True
+    return plaintext, ring
 
 
 def seal(plaintext: bytes, password: str, keyfile: Optional[bytes] = None,

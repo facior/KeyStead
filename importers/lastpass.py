@@ -7,6 +7,7 @@ import os
 from typing import Optional, List
 from importers.base import BaseImporter, ImportResult, ImportItem
 from core.totp_service import parse_otpauth_uri, sanitize_secret
+from core.i18n import _
 
 
 class LastPassImporter(BaseImporter):
@@ -40,12 +41,12 @@ class LastPassImporter(BaseImporter):
             with open(file_path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    title = row.get("name") or row.get("Name") or "Bez tytułu"
+                    title = row.get("name") or row.get("Name") or _("Bez tytułu")
                     url = row.get("url") or row.get("URL") or ""
                     username = row.get("username") or row.get("Username") or ""
                     password_val = row.get("password") or row.get("Password") or ""
                     notes = row.get("extra") or row.get("Notes") or ""
-                    grouping = row.get("grouping") or row.get("Grouping") or "Loginy"
+                    grouping = row.get("grouping") or row.get("Grouping") or "Loginy"  # i18n: data
                     raw_totp = row.get("totp") or ""
 
                     totp = ""
@@ -60,7 +61,7 @@ class LastPassImporter(BaseImporter):
 
                     result.add_item(ImportItem(
                         title=title,
-                        category=grouping if grouping else "Loginy",
+                        category=grouping if grouping else "Loginy",  # i18n: data
                         username=username,
                         password=password_val,
                         url=url,
@@ -69,7 +70,7 @@ class LastPassImporter(BaseImporter):
                         favorite=favorite
                     ))
         except Exception as e:
-            result.add_error(f"Błąd podczas wczytywania pliku LastPass: {str(e)}")
+            result.add_error(_("Błąd podczas wczytywania pliku LastPass: {error}", error=e))
 
         result.success = len(result.items) > 0 and len(result.errors) == 0
         return result

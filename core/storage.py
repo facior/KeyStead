@@ -9,6 +9,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 from core.crypto import compute_sha256, seal, unseal
+from core.i18n import _
 from core.vault import Vault
 
 
@@ -136,7 +137,7 @@ def load_vault(
     Rzuca wyjątek w razie złego hasła lub uszkodzonego pliku.
     """
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Plik sejfu nie istnieje: {file_path}")
+        raise FileNotFoundError(_("Plik sejfu nie istnieje: {path}", path=file_path))
 
     with open(file_path, "rb") as f:
         encrypted_blob = f.read()

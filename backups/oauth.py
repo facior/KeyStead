@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
+from core.i18n import _, current_language
 from core.paths import CONFIG_FILE  # noqa: E402
 REDIRECT_PORT = 53682
 LOGIN_TIMEOUT_SECONDS = 300
@@ -124,7 +125,7 @@ def _pkce_pair():
     return verifier, challenge
 
 
-_SUCCESS_PAGE = """<!doctype html><html lang="pl"><meta charset="utf-8"><title>KeyStead Manager</title>
+_SUCCESS_PAGE = """<!doctype html><html lang="{lang}"><meta charset="utf-8"><title>KeyStead Manager</title>
 <body style="font-family:Segoe UI,sans-serif;background:#090d16;color:#f8fafc;display:flex;align-items:center;
 justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h1>{title}</h1>
 <p style="color:#94a3b8">{message}</p></div></body></html>"""
@@ -148,9 +149,10 @@ def _wait_for_redirect(host: str, expected_state: str, cancel_event: threading.E
             result.update(params)
             ok = "code" in params
             page = _SUCCESS_PAGE.format(
-                title="✅ Zalogowano pomyślnie" if ok else "❌ Logowanie nieudane",
-                message="Możesz zamknąć tę kartę i wrócić do KeyStead Manager." if ok
-                else html.escape(params.get("error_description") or params.get("error") or "Nieprawidłowa odpowiedź.")
+                lang=current_language(),
+                title=_("✅ Zalogowano pomyślnie") if ok else _("❌ Logowanie nieudane"),
+                message=_("Możesz zamknąć tę kartę i wrócić do KeyStead Manager.") if ok
+                else html.escape(params.get("error_description") or params.get("error") or _("Nieprawidłowa odpowiedź."))
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -166,7 +168,7 @@ def _wait_for_redirect(host: str, expected_state: str, cancel_event: threading.E
     try:
         server = HTTPServer((bind_host, REDIRECT_PORT), Handler)
     except OSError as e:
-        raise OAuthError(f"Port {REDIRECT_PORT} jest zajęty – zamknij inne okno logowania i spróbuj ponownie. ({e})")
+        raise OAuthError(_("Port {port} jest zajęty – zamknij inne okno logowania i spróbuj ponownie. ({error})", port=REDIRECT_PORT, error=e))
 
     server.timeout = 0.5
     deadline = time.time() + LOGIN_TIMEOUT_SECONDS
@@ -177,13 +179,13 @@ def _wait_for_redirect(host: str, expected_state: str, cancel_event: threading.E
         server.server_close()
 
     if cancel_event.is_set():
-        raise OAuthError("Logowanie anulowane.")
+        raise OAuthError(_("Logowanie anulowane."))
     if not result:
-        raise OAuthError("Upłynął czas na zalogowanie w przeglądarce.")
+        raise OAuthError(_("Upłynął czas na zalogowanie w przeglądarce."))
     if "error" in result:
-        raise OAuthError(f"Dostawca odrzucił logowanie: {result.get('error_description') or result['error']}")
+        raise OAuthError(_("Dostawca odrzucił logowanie: {error}", error=result.get('error_description') or result['error']))
     if result.get("state") != expected_state:
-        raise OAuthError("Nieprawidłowy parametr state – możliwa próba podszycia się. Spróbuj ponownie.")
+        raise OAuthError(_("Nieprawidłowy parametr state – możliwa próba podszycia się. Spróbuj ponownie."))
     return result
 
 
@@ -195,14 +197,14 @@ def _token_request(provider_key: str, data: Dict[str, str]) -> Dict[str, Any]:
     try:
         resp = requests.post(PROVIDERS[provider_key]["token_url"], data=data, timeout=20)
     except requests.RequestException as e:
-        raise OAuthError(f"Brak połączenia z serwerem logowania: {e}")
+        raise OAuthError(_("Brak połączenia z serwerem logowania: {error}", error=e))
     try:
         payload = resp.json()
     except ValueError:
         payload = {}
     if resp.status_code != 200 or "access_token" not in payload:
         detail = payload.get("error_description") or payload.get("error") or resp.text[:200]
-        raise OAuthError(f"Serwer logowania zwrócił błąd ({resp.status_code}): {detail}")
+        raise OAuthError(_("Serwer logowania zwrócił błąd ({code}): {details}", code=resp.status_code, details=detail))
     return payload
 
 
@@ -229,9 +231,9 @@ def login(
     Zwraca słownik tokenów do zapisania w config["oauth"].
     """
     if provider_key not in PROVIDERS:
-        raise OAuthError(f"Nieznany dostawca: {provider_key}")
+        raise OAuthError(_("Nieznany dostawca: {key}", key=provider_key))
     if not is_client_configured(provider_key):
-        raise OAuthError("Brak identyfikatora aplikacji (Client ID). Uzupełnij go w sekcji 'Konfiguracja logowania do chmury'.")
+        raise OAuthError(_("Brak identyfikatora aplikacji (Client ID). Uzupełnij go w sekcji 'Konfiguracja logowania do chmury'."))
 
     spec = PROVIDERS[provider_key]
     cancel_event = cancel_event or threading.Event()
@@ -295,7 +297,7 @@ def get_access_token(provider_key: str, config: Dict[str, Any]) -> Optional[str]
         return tokens["access_token"]
 
     if not tokens.get("refresh_token"):
-        raise OAuthError("Sesja wygasła – zaloguj się ponownie.")
+        raise OAuthError(_("Sesja wygasła – zaloguj się ponownie."))
 
     data = {"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]}
     if PROVIDERS[provider_key]["scope"] and provider_key == "onedrive":
@@ -303,7 +305,7 @@ def get_access_token(provider_key: str, config: Dict[str, Any]) -> Optional[str]
     try:
         payload = _token_request(provider_key, data)
     except OAuthError as e:
-        raise OAuthError(f"Nie udało się odnowić sesji ({e}). Zaloguj się ponownie.")
+        raise OAuthError(_("Nie udało się odnowić sesji ({error}). Zaloguj się ponownie.", error=e))
     config["oauth"] = _store_tokens(payload, tokens)
     return config["oauth"]["access_token"]
 

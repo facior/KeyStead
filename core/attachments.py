@@ -18,6 +18,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from core.i18n import _
+
 MAGIC = b"KSATT1"
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 DEFAULT_MAX_MB = 10
@@ -41,26 +43,26 @@ def encrypt_attachment(att_id: str, data: bytes) -> Tuple[bytes, str]:
 def decrypt_attachment(meta: Dict[str, Any], blob: bytes) -> bytes:
     att_id = meta.get("id", "")
     if not blob.startswith(MAGIC) or len(blob) < len(MAGIC) + 12 + 16:
-        raise AttachmentError("Plik załącznika jest uszkodzony.")
+        raise AttachmentError(_("Plik załącznika jest uszkodzony."))
     try:
         key = base64.b64decode(meta["key"], validate=True)
         nonce = blob[len(MAGIC):len(MAGIC) + 12]
         return AESGCM(key).decrypt(nonce, blob[len(MAGIC) + 12:], _aad(att_id))
     except Exception:
-        raise AttachmentError("Nie udało się odszyfrować załącznika (plik uszkodzony lub podmieniony).")
+        raise AttachmentError(_("Nie udało się odszyfrować załącznika (plik uszkodzony lub podmieniony)."))
 
 
 def safe_filename(name: str) -> str:
     name = os.path.basename((name or "").replace("\\", "/")).strip()
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)[:200].strip(". ")
-    return name or "załącznik"
+    return name or "załącznik"  # i18n: data (nazwa pliku)
 
 
 def new_attachment(path: str, max_bytes: int) -> Tuple[Dict[str, Any], bytes]:
     """Czyta plik z dysku i przygotowuje (metadane do wpisu, zaszyfrowane bajty)."""
     size = os.path.getsize(path)
     if size > max_bytes:
-        raise AttachmentError(f"Plik jest za duży – limit to {max_bytes // (1024 * 1024)} MB.")
+        raise AttachmentError(_("Plik jest za duży – limit to {mb} MB.", mb=max_bytes // (1024 * 1024)))
     with open(path, "rb") as f:
         data = f.read()
     att_id = uuid.uuid4().hex
@@ -97,7 +99,7 @@ class LocalAttachmentStore:
 
     def _path(self, att_id: str) -> str:
         if not ID_RE.match(att_id or ""):
-            raise AttachmentError("Nieprawidłowy identyfikator załącznika.")
+            raise AttachmentError(_("Nieprawidłowy identyfikator załącznika."))
         return os.path.join(self.directory, f"{att_id}.bin")
 
     def put(self, att_id: str, blob: bytes) -> None:
@@ -114,7 +116,7 @@ class LocalAttachmentStore:
             with open(self._path(att_id), "rb") as f:
                 return f.read()
         except FileNotFoundError:
-            raise AttachmentError("Brak pliku załącznika na tym komputerze.")
+            raise AttachmentError(_("Brak pliku załącznika na tym komputerze."))
 
     def delete(self, att_id: str) -> None:
         try:

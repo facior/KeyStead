@@ -10,12 +10,13 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from backups.base import BaseBackupProvider, BackupStatus
 from core.crypto import compute_sha256
+from core.i18n import _
 
 
 class LocalBackupProvider(BaseBackupProvider):
     @property
     def name(self) -> str:
-        return "Dysk lokalny / USB / Udział sieciowy"
+        return _("Dysk lokalny / USB / Udział sieciowy")
 
     @property
     def key(self) -> str:
@@ -28,7 +29,7 @@ class LocalBackupProvider(BaseBackupProvider):
     def test_connection(self, config: Dict[str, Any]) -> Tuple[bool, str]:
         path = config.get("folder_path") or config.get("local_dir") or ""
         if not path:
-            return False, "Ścieżka do katalogu kopii nie została podana."
+            return False, _("Ścieżka do katalogu kopii nie została podana.")
 
         try:
             os.makedirs(path, exist_ok=True)
@@ -36,9 +37,9 @@ class LocalBackupProvider(BaseBackupProvider):
             with open(test_file, "w") as f:
                 f.write("test")
             os.remove(test_file)
-            return True, f"Katalog jest dostępny i zapisywalny: {path}"
+            return True, _("Katalog jest dostępny i zapisywalny: {path}", path=path)
         except Exception as e:
-            return False, f"Błąd zapisu w wybranym katalogu: {str(e)}"
+            return False, _("Błąd zapisu w wybranym katalogu: {error}", error=e)
 
     def upload_backup(
         self,
@@ -47,11 +48,11 @@ class LocalBackupProvider(BaseBackupProvider):
         custom_filename: Optional[str] = None
     ) -> BackupStatus:
         if not os.path.exists(vault_file_path):
-            return BackupStatus(self.name, False, error_message="Plik źródłowy sejfu nie istnieje.")
+            return BackupStatus(self.name, False, error_message=_("Plik źródłowy sejfu nie istnieje."))
 
         dest_dir = config.get("folder_path") or config.get("local_dir") or ""
         if not dest_dir:
-            return BackupStatus(self.name, False, error_message="Brak skonfigurowanego katalogu docelowego.")
+            return BackupStatus(self.name, False, error_message=_("Brak skonfigurowanego katalogu docelowego."))
 
         try:
             os.makedirs(dest_dir, exist_ok=True)
@@ -80,7 +81,7 @@ class LocalBackupProvider(BaseBackupProvider):
                     self.name,
                     False,
                     destination_path=dest_file,
-                    error_message="Niezgodność sumy kontrolnej SHA-256 po zapisie kopii lokalnej!"
+                    error_message=_("Niezgodność sumy kontrolnej SHA-256 po zapisie kopii lokalnej!")
                 )
 
             # Opcjonalna rotacja starych kopii (np. zachowaj ostatnie 15)
@@ -96,7 +97,7 @@ class LocalBackupProvider(BaseBackupProvider):
                 size_bytes=len(dest_data)
             )
         except Exception as e:
-            return BackupStatus(self.name, False, error_message=f"Błąd tworzenia kopii lokalnej: {str(e)}")
+            return BackupStatus(self.name, False, error_message=_("Błąd tworzenia kopii lokalnej: {error}", error=e))
 
     def _rotate_backups(self, dest_dir: str, base_name: str, keep_count: int) -> None:
         try:

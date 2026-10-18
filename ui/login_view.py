@@ -23,11 +23,13 @@ from sync import EmptyServerError, ServerProfile, SyncSession, delete_profile, l
 from sync.client import AuthError, CertificateError, TotpRequiredError, check_server_url, enroll_device
 from sync.session import read_cached_branding, read_cached_policy
 from ui.quick_unlock_ui import file_target, quick, server_target
+from ui.language_ui import LanguageMenu
 from ui.recovery_ui import NewPasswordDialog, PasswordPrompt
-from core.crypto import seal, unseal_with_recovery_code
+from core.crypto import YubiKeyRequiredError, password_yubikey, seal, unseal_with_recovery_code
 from core.storage import write_encrypted_file
 from sync.client import RemoteVaultClient
 from core.paths import branding_logo_path
+from core.i18n import N_, _, _n
 from core.version import APP_VERSION
 from ui.totp_dialog import TotpDialog
 from sync.tailscale import discover_servers
@@ -36,7 +38,7 @@ from core.generator import evaluate_password_strength, check_master_password
 from ui.theme import (
     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_SMALL,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_CARD_DARK, COLOR_CARD_HOVER, COLOR_PANEL_DARK,
-    COLOR_SUCCESS, COLOR_DANGER, COLOR_BORDER, COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED
+    COLOR_SUCCESS, COLOR_DANGER, COLOR_BORDER, COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, COLOR_TEXT_ACCENT
 )
 
 
@@ -111,7 +113,10 @@ class LoginView(ctk.CTkFrame):
         card = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK, corner_radius=16, width=540)
         card.place(relx=0.5, rely=0.5, anchor="center")
 
-        ctk.CTkButton(self, text=f"KeyStead Manager {APP_VERSION}  ·  O programie", font=FONT_SMALL, height=22,
+        LanguageMenu(self, on_change=lambda code: self.winfo_toplevel().restart_app()
+                     ).place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=8)
+
+        ctk.CTkButton(self, text=_("KeyStead Manager {version}  ·  O programie", version=APP_VERSION), font=FONT_SMALL, height=22,
                       fg_color="transparent", hover_color=COLOR_PANEL_DARK, text_color=COLOR_TEXT_MUTED,
                       command=self._show_about).place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-6)
 
@@ -129,7 +134,7 @@ class LoginView(ctk.CTkFrame):
 
         subtitle = ctk.CTkLabel(
             inner,
-            text="Profesjonalny menedżer haseł z kopią chmurową",
+            text=_("Profesjonalny menedżer haseł z kopią chmurową"),
             font=FONT_BODY,
             text_color=COLOR_TEXT_MUTED
         )
@@ -138,7 +143,7 @@ class LoginView(ctk.CTkFrame):
         # Przycisk samouczka
         ctk.CTkButton(
             inner,
-            text="✨ Nowy w aplikacji? Uruchom Asystenta Krok po Kroku",
+            text=_("✨ Nowy w aplikacji? Uruchom Asystenta Krok po Kroku"),
             font=FONT_SMALL,
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
@@ -161,9 +166,13 @@ class LoginView(ctk.CTkFrame):
         self.tabview = ctk.CTkTabview(inner, height=360, width=460)
         self.tabview.pack(fill="both", expand=True)
 
-        self.tab_unlock = self.tabview.add("Odblokuj Sejf")
-        self.tab_create = self.tabview.add("Utwórz Nowy Sejf")
-        self.tab_server = self.tabview.add("🌐 Serwer")
+        # Nazwy zakładek są jednocześnie ich identyfikatorami (tabview.set / tabview.get) – tłumaczone raz
+        self.TAB_UNLOCK = _("Odblokuj Sejf")
+        self.TAB_CREATE = _("Utwórz Nowy Sejf")
+        self.TAB_SERVER = _("🌐 Serwer")
+        self.tab_unlock = self.tabview.add(self.TAB_UNLOCK)
+        self.tab_create = self.tabview.add(self.TAB_CREATE)
+        self.tab_server = self.tabview.add(self.TAB_SERVER)
 
         self._setup_unlock_tab()
         self._setup_create_tab()
@@ -171,29 +180,29 @@ class LoginView(ctk.CTkFrame):
 
         # Jeśli komputer jest już połączony z serwerem – to domyślny sposób logowania
         if self.server_profile:
-            self.tabview.set("🌐 Serwer")
+            self.tabview.set(self.TAB_SERVER)
 
     def _setup_unlock_tab(self):
         f = self.tab_unlock
 
         # Wybór pliku sejfu
-        ctk.CTkLabel(f, text="Plik bazy sejfu:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(8, 2))
+        ctk.CTkLabel(f, text=_("Plik bazy sejfu:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(8, 2))
         file_box = ctk.CTkFrame(f, fg_color="transparent")
         file_box.pack(fill="x", pady=(0, 10))
 
-        self.unlock_file_entry = ctk.CTkEntry(file_box, placeholder_text="Wskaż plik .vault...")
+        self.unlock_file_entry = ctk.CTkEntry(file_box, placeholder_text=_("Wskaż plik .vault..."))
         if self.recent_vaults:
             self.unlock_file_entry.insert(0, self.recent_vaults[0])
         self.unlock_file_entry.pack(side="left", expand=True, fill="x", padx=(0, 8))
 
-        ctk.CTkButton(file_box, text="Przeglądaj...", width=95, fg_color=COLOR_CARD_DARK, command=self._browse_unlock_file).pack(side="left")
+        ctk.CTkButton(file_box, text=_("Przeglądaj..."), width=95, fg_color=COLOR_CARD_DARK, command=self._browse_unlock_file).pack(side="left")
 
         # Hasło główne
-        ctk.CTkLabel(f, text="Hasło główne (Master Password):", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        ctk.CTkLabel(f, text=_("Hasło główne (Master Password):"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
         pwd_box = ctk.CTkFrame(f, fg_color="transparent")
         pwd_box.pack(fill="x", pady=(0, 10))
 
-        self.unlock_pwd_entry = ctk.CTkEntry(pwd_box, show="•", placeholder_text="Wpisz hasło główne...")
+        self.unlock_pwd_entry = ctk.CTkEntry(pwd_box, show="•", placeholder_text=_("Wpisz hasło główne..."))
         self.unlock_pwd_entry.pack(side="left", expand=True, fill="x", padx=(0, 6))
         self.unlock_pwd_entry.bind("<Return>", lambda e: self._do_unlock())
 
@@ -203,14 +212,14 @@ class LoginView(ctk.CTkFrame):
         # Opcjonalny plik klucza
         key_box = ctk.CTkFrame(f, fg_color="transparent")
         key_box.pack(fill="x", pady=(0, 15))
-        self.unlock_key_entry = ctk.CTkEntry(key_box, placeholder_text="Opcjonalny plik-klucz (Keyfile)...")
+        self.unlock_key_entry = ctk.CTkEntry(key_box, placeholder_text=_("Opcjonalny plik-klucz (Keyfile)..."))
         self.unlock_key_entry.pack(side="left", expand=True, fill="x", padx=(0, 6))
-        ctk.CTkButton(key_box, text="Klucz...", width=70, fg_color=COLOR_CARD_DARK, command=self._browse_unlock_keyfile).pack(side="left")
+        ctk.CTkButton(key_box, text=_("Klucz..."), width=70, fg_color=COLOR_CARD_DARK, command=self._browse_unlock_keyfile).pack(side="left")
 
         # Przycisk Odblokuj
         self.unlock_btn = ctk.CTkButton(
             f,
-            text="🔓 Odblokuj sejf",
+            text=_("🔓 Odblokuj sejf"),
             font=FONT_SUBTITLE,
             height=42,
             fg_color=COLOR_PRIMARY,
@@ -220,11 +229,11 @@ class LoginView(ctk.CTkFrame):
         self.unlock_btn.pack(fill="x", pady=(10, 0))
 
         self.hello_local_btn = ctk.CTkButton(
-            f, text="🔐 Odblokuj przez Windows Hello", height=34, fg_color=COLOR_CARD_DARK,
+            f, text=_("🔐 Odblokuj przez Windows Hello"), height=34, fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER, command=self._hello_local
         )
         self.unlock_file_entry.bind("<FocusOut>", lambda e: self._refresh_hello_buttons())
-        ctk.CTkButton(f, text="Nie pamiętam hasła", height=22, font=FONT_SMALL, fg_color="transparent",
+        ctk.CTkButton(f, text=_("Nie pamiętam hasła"), height=22, font=FONT_SMALL, fg_color="transparent",
                       hover_color=COLOR_CARD_HOVER, text_color=COLOR_TEXT_MUTED,
                       command=lambda: self._forgot_password("local")).pack(side="bottom", anchor="e", pady=(6, 0))
 
@@ -234,23 +243,23 @@ class LoginView(ctk.CTkFrame):
         if mode == "local":
             path = self.unlock_file_entry.get().strip()
             if not path or not os.path.isfile(path):
-                self.error_label.configure(text="Najpierw wskaż plik sejfu, do którego chcesz odzyskać dostęp.")
+                self.error_label.configure(text=_("Najpierw wskaż plik sejfu, do którego chcesz odzyskać dostęp."))
                 return
             client = None
         else:
             profile = self.server_profile
             if not profile or not profile.token:
-                self.error_label.configure(text="Ten komputer nie jest połączony z serwerem – poproś administratora "
-                                                "o odzyskanie dostępu lub użyj kodu odzyskiwania przy pliku sejfu.")
+                self.error_label.configure(text=_("Ten komputer nie jest połączony z serwerem – poproś administratora "
+                                                  "o odzyskanie dostępu lub użyj kodu odzyskiwania przy pliku sejfu."))
                 return
             path = None
             client = RemoteVaultClient(profile.url, profile.token, ca_file=profile.ca_file)
-        code = PasswordPrompt(self, "Odzyskiwanie dostępu",
-                              "Wpisz kod odzyskiwania (30 znaków, np. ABCDE-FGHJK-…). Myślniki i wielkość liter nie mają znaczenia.\n"
-                              "Nie masz kodu? W firmie dostęp może przywrócić administrator.", secret=False).wait()
+        code = PasswordPrompt(self, _("Odzyskiwanie dostępu"),
+                              _("Wpisz kod odzyskiwania (30 znaków, np. ABCDE-FGHJK-…). Myślniki i wielkość liter nie mają znaczenia.\n"
+                                "Nie masz kodu? W firmie dostęp może przywrócić administrator."), secret=False).wait()
         if not code:
             return
-        self.error_label.configure(text="🔑 Sprawdzanie kodu odzyskiwania...", text_color=COLOR_TEXT_MUTED)
+        self.error_label.configure(text=_("🔑 Sprawdzanie kodu odzyskiwania..."), text_color=COLOR_TEXT_MUTED)
 
         def _work():
             if client is None:
@@ -266,12 +275,12 @@ class LoginView(ctk.CTkFrame):
                 self.error_label.configure(text=f"❌ {result}", text_color=COLOR_DANGER)
                 return
             plaintext, ring, version = result
-            new_pwd = NewPasswordDialog(self, intro="Kod odzyskiwania poprawny. Ustaw nowe hasło główne – stary plik-klucz "
-                                                    "(jeśli był używany) przestaje być wymagany.").wait()
+            new_pwd = NewPasswordDialog(self, intro=_("Kod odzyskiwania poprawny. Ustaw nowe hasło główne – stary plik-klucz "
+                                                      "(jeśli był używany) przestaje być wymagany.")).wait()
             if not new_pwd:
-                self.error_label.configure(text="Odzyskiwanie przerwane – hasło nie zostało zmienione.")
+                self.error_label.configure(text=_("Odzyskiwanie przerwane – hasło nie zostało zmienione."))
                 return
-            self.error_label.configure(text="🔑 Zapisywanie nowego hasła...", text_color=COLOR_TEXT_MUTED)
+            self.error_label.configure(text=_("🔑 Zapisywanie nowego hasła..."), text_color=COLOR_TEXT_MUTED)
             self._run_bg(lambda: self._apply_recovery(plaintext, ring, version, new_pwd, path, client),
                          lambda res: self._recovered(res, mode, new_pwd))
 
@@ -293,12 +302,12 @@ class LoginView(ctk.CTkFrame):
 
     def _recovered(self, error, mode: str, new_pwd: str):
         if error is not None:
-            self.error_label.configure(text=f"❌ Nie udało się zapisać nowego hasła: {error}", text_color=COLOR_DANGER)
+            self.error_label.configure(text=_("❌ Nie udało się zapisać nowego hasła: {error}", error=error), text_color=COLOR_DANGER)
             return
         target = self._hello_local_target() if mode == "local" else self._hello_server_target()
         if target:
             quick.disable(target)  # zapisane dla Windows Hello stare hasło jest już nieaktualne
-        messagebox.showinfo("Odzyskiwanie dostępu", "Nowe hasło główne zostało ustawione. Odblokowuję sejf.")
+        messagebox.showinfo(_("Odzyskiwanie dostępu"), _("Nowe hasło główne zostało ustawione. Odblokowuję sejf."))
         if mode == "local":
             self.unlock_key_entry.delete(0, "end")
             self._do_unlock(password=new_pwd, keyfile=None)
@@ -333,7 +342,7 @@ class LoginView(ctk.CTkFrame):
         global _AUTO_PROMPTED
         if auto and not _AUTO_PROMPTED and (local_ok or server_ok):
             _AUTO_PROMPTED = True
-            on_server_tab = self.tabview.get() == "🌐 Serwer"
+            on_server_tab = self.tabview.get() == self.TAB_SERVER
             if on_server_tab and server_ok:
                 self.after(300, self._hello_server)
             elif not on_server_tab and local_ok:
@@ -347,7 +356,7 @@ class LoginView(ctk.CTkFrame):
         target = self._hello_local_target()
         if not target:
             return
-        self.error_label.configure(text="🔐 Potwierdź tożsamość w oknie Windows Hello...", text_color=COLOR_TEXT_MUTED)
+        self.error_label.configure(text=_("🔐 Potwierdź tożsamość w oknie Windows Hello..."), text_color=COLOR_TEXT_MUTED)
         self.hello_local_btn.configure(state="disabled")
 
         def _done(result):
@@ -364,7 +373,7 @@ class LoginView(ctk.CTkFrame):
         target = self._hello_server_target()
         if not target:
             return
-        self.error_label.configure(text="🔐 Potwierdź tożsamość w oknie Windows Hello...", text_color=COLOR_TEXT_MUTED)
+        self.error_label.configure(text=_("🔐 Potwierdź tożsamość w oknie Windows Hello..."), text_color=COLOR_TEXT_MUTED)
         self.hello_server_btn.configure(state="disabled")
 
         def _done(result):
@@ -380,20 +389,20 @@ class LoginView(ctk.CTkFrame):
     def _setup_create_tab(self):
         f = self.tab_create
 
-        ctk.CTkLabel(f, text="Gdzie zapisać nowy sejf:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(f, text=_("Gdzie zapisać nowy sejf:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(6, 2))
         file_box = ctk.CTkFrame(f, fg_color="transparent")
         file_box.pack(fill="x", pady=(0, 8))
 
-        self.create_path_entry = ctk.CTkEntry(file_box, placeholder_text="Ścieżka do nowego pliku .vault...")
-        default_new_path = os.path.join(os.path.expanduser("~"), "Documents", "MojSejf.vault")
+        self.create_path_entry = ctk.CTkEntry(file_box, placeholder_text=_("Ścieżka do nowego pliku .vault..."))
+        default_new_path = os.path.join(os.path.expanduser("~"), "Documents", _("MojSejf.vault"))
         self.create_path_entry.insert(0, default_new_path)
         self.create_path_entry.pack(side="left", expand=True, fill="x", padx=(0, 8))
 
-        ctk.CTkButton(file_box, text="Wybierz...", width=95, fg_color=COLOR_CARD_DARK, command=self._browse_create_path).pack(side="left")
+        ctk.CTkButton(file_box, text=_("Wybierz..."), width=95, fg_color=COLOR_CARD_DARK, command=self._browse_create_path).pack(side="left")
 
         # Nowe hasło i potwierdzenie
-        ctk.CTkLabel(f, text="Hasło główne do sejfu:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        self.create_pwd1 = ctk.CTkEntry(f, show="•", placeholder_text="Silne hasło główne...")
+        ctk.CTkLabel(f, text=_("Hasło główne do sejfu:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.create_pwd1 = ctk.CTkEntry(f, show="•", placeholder_text=_("Silne hasło główne..."))
         self.create_pwd1.pack(fill="x", pady=(0, 4))
         self.create_pwd1.bind("<KeyRelease>", self._on_create_pwd_typed)
 
@@ -401,13 +410,13 @@ class LoginView(ctk.CTkFrame):
         self.create_strength_bar.pack(fill="x", pady=(0, 6))
         self.create_strength_bar.set(0)
 
-        ctk.CTkLabel(f, text="Powtórz hasło główne:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        self.create_pwd2 = ctk.CTkEntry(f, show="•", placeholder_text="Powtórz hasło...")
+        ctk.CTkLabel(f, text=_("Powtórz hasło główne:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.create_pwd2 = ctk.CTkEntry(f, show="•", placeholder_text=_("Powtórz hasło..."))
         self.create_pwd2.pack(fill="x", pady=(0, 15))
 
         self.create_btn = ctk.CTkButton(
             f,
-            text="✨ Utwórz zaszyfrowany sejf",
+            text=_("✨ Utwórz zaszyfrowany sejf"),
             font=FONT_SUBTITLE,
             height=40,
             fg_color=COLOR_SUCCESS,
@@ -426,8 +435,8 @@ class LoginView(ctk.CTkFrame):
 
     def _browse_unlock_file(self):
         p = filedialog.askopenfilename(
-            title="Wybierz plik sejfu",
-            filetypes=[("Pliki Sejfu", "*.vault"), ("Wszystkie pliki", "*.*")]
+            title=_("Wybierz plik sejfu"),
+            filetypes=[(_("Pliki Sejfu"), "*.vault"), (_("Wszystkie pliki"), "*.*")]
         )
         if p:
             self.unlock_file_entry.delete(0, "end")
@@ -436,16 +445,16 @@ class LoginView(ctk.CTkFrame):
             self._refresh_hello_buttons()
 
     def _browse_unlock_keyfile(self):
-        p = filedialog.askopenfilename(title="Wybierz plik klucza")
+        p = filedialog.askopenfilename(title=_("Wybierz plik klucza"))
         if p:
             self.unlock_key_entry.delete(0, "end")
             self.unlock_key_entry.insert(0, p)
 
     def _browse_create_path(self):
         p = filedialog.asksaveasfilename(
-            title="Wybierz lokalizację nowego sejfu",
+            title=_("Wybierz lokalizację nowego sejfu"),
             defaultextension=".vault",
-            filetypes=[("Plik Sejfu", "*.vault")]
+            filetypes=[(_("Plik Sejfu"), "*.vault")]
         )
         if p:
             self.create_path_entry.delete(0, "end")
@@ -472,41 +481,87 @@ class LoginView(ctk.CTkFrame):
         self.error_label.configure(text="", text_color=COLOR_DANGER)
 
         if not file_path or not os.path.exists(file_path):
-            self.error_label.configure(text="Wskazany plik sejfu nie istnieje.")
+            self.error_label.configure(text=_("Wskazany plik sejfu nie istnieje."))
             return
 
         if not password:
-            self.error_label.configure(text="Podaj hasło główne sejfu.")
+            self.error_label.configure(text=_("Podaj hasło główne sejfu."))
             return
 
         keyfile_bytes = keyfile if from_hello else None
         if key_path:
             if not os.path.isfile(key_path):
-                self.error_label.configure(text="Wskazany plik-klucz nie istnieje.")
+                self.error_label.configure(text=_("Wskazany plik-klucz nie istnieje."))
                 return
             with open(key_path, "rb") as kf:
                 keyfile_bytes = kf.read()
 
-        self.unlock_btn.configure(text="Deszyfrowanie i weryfikacja...", state="disabled")
+        self.unlock_btn.configure(text=_("Deszyfrowanie i weryfikacja..."), state="disabled")
         self.update_idletasks()
 
-        vault = None
+        if self._needs_yubikey(file_path):
+            # Czekanie na dotknięcie klucza nie może zamrozić okna – odszyfrowanie w tle
+            self.show_yubikey_hint()
+
+            def _work():
+                try:
+                    return load_vault(file_path, password, keyfile_bytes)
+                except Exception as e:
+                    return e
+
+            def _done(result):
+                if self.winfo_exists():
+                    self._unlock_finished(result, password, file_path, keyfile_bytes)
+            post = getattr(self.winfo_toplevel(), "post_to_ui", None) or (lambda fn: self.after(0, fn))
+            threading.Thread(target=lambda: post(lambda r=_work(): _done(r)), daemon=True).start()
+            return
         try:
-            vault = load_vault(file_path, password, keyfile_bytes)
+            result = load_vault(file_path, password, keyfile_bytes)
+        except Exception as e:
+            result = e
+        self._unlock_finished(result, password, file_path, keyfile_bytes)
+
+    @staticmethod
+    def _needs_yubikey(file_path: str) -> bool:
+        try:
+            with open(file_path, "rb") as f:
+                return password_yubikey(f.read()) is not None
+        except Exception:
+            return False
+
+    def show_yubikey_hint(self):
+        if self.winfo_exists():
+            self.error_label.configure(text=_("🔑 Ten sejf wymaga YubiKey – dotknij go, gdy zacznie migać."),
+                                       text_color=COLOR_TEXT_ACCENT)
+
+    def _unlock_finished(self, result, password, file_path, keyfile_bytes):
+        vault = result
+        if self.winfo_exists():
+            self.error_label.configure(text_color=COLOR_DANGER)  # po podpowiedzi o YubiKey – błędy na czerwono
+        try:
+            if isinstance(result, Exception):
+                raise result
+        except YubiKeyRequiredError as e:
+            if self.winfo_exists():
+                self.error_label.configure(text=_("🔑 {error}", error=e), text_color=COLOR_DANGER)
+                self.unlock_btn.configure(text=_("🔓 Odblokuj sejf"), state="normal")
+            return
         except InvalidPasswordOrCorruptDataError:
             if self.winfo_exists():
-                self.error_label.configure(text="❌ Niepoprawne hasło główne (bądź plik klucza).")
-                self.unlock_btn.configure(text="🔓 Odblokuj sejf", state="normal")
+                self.error_label.configure(text=_("❌ Niepoprawne hasło główne albo inny YubiKey niż ten, którym "
+                                                  "zabezpieczono sejf.") if self._needs_yubikey(file_path) else
+                                           _("❌ Niepoprawne hasło główne (bądź plik klucza)."))
+                self.unlock_btn.configure(text=_("🔓 Odblokuj sejf"), state="normal")
             return
         except InvalidVaultHeaderError:
             if self.winfo_exists():
-                self.error_label.configure(text="❌ Plik nie jest prawidłowym sejfem lub jest uszkodzony.")
-                self.unlock_btn.configure(text="🔓 Odblokuj sejf", state="normal")
+                self.error_label.configure(text=_("❌ Plik nie jest prawidłowym sejfem lub jest uszkodzony."))
+                self.unlock_btn.configure(text=_("🔓 Odblokuj sejf"), state="normal")
             return
         except Exception as e:
             if self.winfo_exists():
-                self.error_label.configure(text=f"Błąd odczytu: {str(e)}")
-                self.unlock_btn.configure(text="🔓 Odblokuj sejf", state="normal")
+                self.error_label.configure(text=_("Błąd odczytu: {error}", error=e))
+                self.unlock_btn.configure(text=_("🔓 Odblokuj sejf"), state="normal")
             return
 
         # Przejście do widoku głównego sejfu (LoginView zostanie zniszczone)
@@ -520,7 +575,7 @@ class LoginView(ctk.CTkFrame):
         self.error_label.configure(text="")
 
         if not save_path:
-            self.error_label.configure(text="Podaj ścieżkę do pliku nowego sejfu.")
+            self.error_label.configure(text=_("Podaj ścieżkę do pliku nowego sejfu."))
             return
 
         allowed, policy_msg = check_master_password(p1)
@@ -529,18 +584,18 @@ class LoginView(ctk.CTkFrame):
             return
 
         if p1 != p2:
-            self.error_label.configure(text="Wprowadzone hasła różnią się od siebie.")
+            self.error_label.configure(text=_("Wprowadzone hasła różnią się od siebie."))
             return
 
-        if policy_msg and not messagebox.askyesno("Średnio silne hasło główne", policy_msg + "\n\nUżyć mimo to?", icon="warning"):
+        if policy_msg and not messagebox.askyesno(_("Średnio silne hasło główne"), policy_msg + "\n\n" + _("Użyć mimo to?"), icon="warning"):
             return
 
         if not save_path.lower().endswith(VAULT_FILE_EXTENSION):
             save_path += VAULT_FILE_EXTENSION
 
         if os.path.exists(save_path) and not messagebox.askyesno(
-            "Plik już istnieje",
-            f"Plik {save_path} już istnieje.\n\nNadpisanie go NIEODWRACALNIE usunie zapisany w nim sejf. Kontynuować?",
+            _("Plik już istnieje"),
+            _("Plik {path} już istnieje.\n\nNadpisanie go NIEODWRACALNIE usunie zapisany w nim sejf. Kontynuować?", path=save_path),
             icon="warning"
         ):
             return
@@ -550,10 +605,10 @@ class LoginView(ctk.CTkFrame):
 
         try:
             save_vault(vault, save_path, p1)
-            messagebox.showinfo("Sukces", f"Utworzono nowy, zaszyfrowany sejf:\n{save_path}")
+            messagebox.showinfo(_("Sukces"), _("Utworzono nowy, zaszyfrowany sejf:\n{path}", path=save_path))
         except Exception as e:
             if self.winfo_exists():
-                self.error_label.configure(text=f"Nie udało się utworzyć sejfu: {str(e)}")
+                self.error_label.configure(text=_("Nie udało się utworzyć sejfu: {error}", error=e))
             return
 
         self.on_vault_unlocked(vault, p1, save_path, None)
@@ -567,44 +622,44 @@ class LoginView(ctk.CTkFrame):
 
         # Adres i kod – widoczne przy pierwszym połączeniu lub po kliknięciu "Zmień serwer"
         self.server_fields = ctk.CTkFrame(f, fg_color="transparent")
-        ctk.CTkLabel(self.server_fields, text="Adres serwera:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        ctk.CTkLabel(self.server_fields, text=_("Adres serwera:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
         url_row = ctk.CTkFrame(self.server_fields, fg_color="transparent")
         url_row.pack(fill="x", pady=(0, 6))
-        self.server_url_entry = ctk.CTkEntry(url_row, placeholder_text="https://vault.twojafirma.pl lub https://serwer.siec.ts.net")
+        self.server_url_entry = ctk.CTkEntry(url_row, placeholder_text=_("https://vault.twojafirma.pl lub https://serwer.siec.ts.net"))
         self.server_url_entry.pack(side="left", expand=True, fill="x", padx=(0, 6))
         self.ts_detect_btn = ctk.CTkButton(url_row, text="🔍 Tailscale", width=95, fg_color=COLOR_CARD_DARK,
                                            hover_color=COLOR_CARD_HOVER, command=self._detect_tailscale)
         self.ts_detect_btn.pack(side="left")
-        ctk.CTkLabel(self.server_fields, text="Kod aktywacyjny od administratora (lub token urządzenia):", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        self.server_token_entry = ctk.CTkEntry(self.server_fields, placeholder_text="np. K7QM-4XTP-9HRW")
+        ctk.CTkLabel(self.server_fields, text=_("Kod aktywacyjny od administratora (lub token urządzenia):"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.server_token_entry = ctk.CTkEntry(self.server_fields, placeholder_text=_("np. K7QM-4XTP-9HRW"))
         self.server_token_entry.pack(fill="x", pady=(0, 6))
 
         self.server_change_btn = ctk.CTkButton(
-            f, text="Zmień serwer / dołącz ponownie", height=24, font=FONT_SMALL,
+            f, text=_("Zmień serwer / dołącz ponownie"), height=24, font=FONT_SMALL,
             fg_color="transparent", hover_color=COLOR_CARD_HOVER, command=self._show_server_fields
         )
 
-        ctk.CTkLabel(f, text="Hasło główne:", font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
-        self.server_pwd_entry = ctk.CTkEntry(f, show="•", placeholder_text="Hasło główne sejfu...")
+        ctk.CTkLabel(f, text=_("Hasło główne:"), font=FONT_BODY_BOLD).pack(anchor="w", pady=(2, 2))
+        self.server_pwd_entry = ctk.CTkEntry(f, show="•", placeholder_text=_("Hasło główne sejfu..."))
         self.server_pwd_entry.pack(fill="x", pady=(0, 6))
         self.server_pwd_entry.bind("<Return>", lambda e: self._do_server_unlock())
 
         key_box = ctk.CTkFrame(f, fg_color="transparent")
         key_box.pack(fill="x", pady=(0, 8))
-        self.server_key_entry = ctk.CTkEntry(key_box, placeholder_text="Opcjonalny plik-klucz (Keyfile)...")
+        self.server_key_entry = ctk.CTkEntry(key_box, placeholder_text=_("Opcjonalny plik-klucz (Keyfile)..."))
         self.server_key_entry.pack(side="left", expand=True, fill="x", padx=(0, 6))
-        ctk.CTkButton(key_box, text="Klucz...", width=70, fg_color=COLOR_CARD_DARK, command=lambda: self._browse_into(self.server_key_entry)).pack(side="left")
+        ctk.CTkButton(key_box, text=_("Klucz..."), width=70, fg_color=COLOR_CARD_DARK, command=lambda: self._browse_into(self.server_key_entry)).pack(side="left")
 
         self.server_btn = ctk.CTkButton(
-            f, text="🌐 Połącz i odblokuj", font=FONT_SUBTITLE, height=40,
+            f, text=_("🌐 Połącz i odblokuj"), font=FONT_SUBTITLE, height=40,
             fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, command=self._do_server_unlock
         )
         self.server_btn.pack(fill="x", pady=(4, 0))
         self.hello_server_btn = ctk.CTkButton(
-            f, text="🔐 Odblokuj przez Windows Hello", height=34, fg_color=COLOR_CARD_DARK,
+            f, text=_("🔐 Odblokuj przez Windows Hello"), height=34, fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER, command=self._hello_server
         )
-        ctk.CTkButton(f, text="Nie pamiętam hasła", height=22, font=FONT_SMALL, fg_color="transparent",
+        ctk.CTkButton(f, text=_("Nie pamiętam hasła"), height=22, font=FONT_SMALL, fg_color="transparent",
                       hover_color=COLOR_CARD_HOVER, text_color=COLOR_TEXT_MUTED,
                       command=lambda: self._forgot_password("server")).pack(side="bottom", anchor="e", pady=(6, 0))
         self._refresh_server_header()
@@ -614,16 +669,17 @@ class LoginView(ctk.CTkFrame):
         if p:
             if not self.server_url_entry.get():
                 self.server_url_entry.insert(0, p.url)
-            account = f"Konto: {p.account_name}\n" if p.account_name else ""
+            account = _("Konto: {name}", name=p.account_name) + "\n" if p.account_name else ""
             company = read_cached_branding(p).get("company_name")
-            firm = f"Firma: {company}\n" if company else ""
-            self.server_info_lbl.configure(text=f"{firm}Serwer: {p.url}\n{account}Urządzenie: {p.device_name or '—'}")
+            firm = _("Firma: {company}", company=company) + "\n" if company else ""
+            self.server_info_lbl.configure(text=firm + _("Serwer: {url}", url=p.url) + "\n" + account
+                                           + _("Urządzenie: {device}", device=p.device_name or "—"))
             self._show_cached_logo(p)
             self.server_fields.pack_forget()
             self.server_change_btn.pack(anchor="w", pady=(0, 4), after=self.server_info_lbl)
             self._refresh_hello_buttons()
         else:
-            self.server_info_lbl.configure(text="Połącz ten komputer z serwerem synchronizacji swojej firmy lub własnym (np. przez Tailscale).")
+            self.server_info_lbl.configure(text=_("Połącz ten komputer z serwerem synchronizacji swojej firmy lub własnym (np. przez Tailscale)."))
             self.server_change_btn.pack_forget()
             self.server_fields.pack(fill="x", after=self.server_info_lbl)
 
@@ -651,7 +707,7 @@ class LoginView(ctk.CTkFrame):
     # ------------------------------------------------------------- Tailscale
     def _detect_tailscale(self):
         self.error_label.configure(text="")
-        self.ts_detect_btn.configure(text="Szukam...", state="disabled")
+        self.ts_detect_btn.configure(text=_("Szukam..."), state="disabled")
 
         def _work():
             try:
@@ -665,7 +721,7 @@ class LoginView(ctk.CTkFrame):
                 self.error_label.configure(text=str(res))
                 return
             if not res:
-                self.error_label.configure(text="W Twojej sieci Tailscale nie znaleziono serwera KeyStead (sprawdź, czy serwer jest włączony).")
+                self.error_label.configure(text=_("W Twojej sieci Tailscale nie znaleziono serwera KeyStead (sprawdź, czy serwer jest włączony)."))
                 return
             if len(res) == 1:
                 self._use_discovered(res[0])
@@ -677,16 +733,16 @@ class LoginView(ctk.CTkFrame):
     def _use_discovered(self, server):
         self.server_url_entry.delete(0, "end")
         self.server_url_entry.insert(0, server.url)
-        self.error_label.configure(text=f"✅ Znaleziono serwer w Tailscale: {server.name}", text_color=COLOR_SUCCESS)
+        self.error_label.configure(text=_("✅ Znaleziono serwer w Tailscale: {name}", name=server.name), text_color=COLOR_SUCCESS)
         self.after(4000, lambda: self.winfo_exists() and self.error_label.configure(text="", text_color=COLOR_DANGER))
         self.server_token_entry.focus()
 
     def _choose_discovered(self, servers):
         win = ctk.CTkToplevel(self)
-        win.title("Serwery w sieci Tailscale")
+        win.title(_("Serwery w sieci Tailscale"))
         win.geometry("460x320")
         win.transient(self.winfo_toplevel())
-        ctk.CTkLabel(win, text="Wybierz serwer:", font=FONT_SUBTITLE).pack(anchor="w", padx=16, pady=(14, 8))
+        ctk.CTkLabel(win, text=_("Wybierz serwer:"), font=FONT_SUBTITLE).pack(anchor="w", padx=16, pady=(14, 8))
         for s in servers:
             def _pick(server=s):
                 win.destroy()
@@ -696,14 +752,14 @@ class LoginView(ctk.CTkFrame):
 
     # ------------------------------------------------------------- łączenie
     def _browse_into(self, entry):
-        p = filedialog.askopenfilename(title="Wybierz plik klucza")
+        p = filedialog.askopenfilename(title=_("Wybierz plik klucza"))
         if p:
             entry.delete(0, "end")
             entry.insert(0, p)
 
-    def _server_busy(self, busy: bool, text: str = "🌐 Połącz i odblokuj"):
+    def _server_busy(self, busy: bool, text: str = ""):
         if self.winfo_exists():
-            self.server_btn.configure(text=text, state="disabled" if busy else "normal")
+            self.server_btn.configure(text=text or _("🌐 Połącz i odblokuj"), state="disabled" if busy else "normal")
 
     def _do_server_unlock(self, password: Optional[str] = None, keyfile: Optional[bytes] = None):
         self.error_label.configure(text="", text_color=COLOR_DANGER)
@@ -718,7 +774,7 @@ class LoginView(ctk.CTkFrame):
             url = self.server_url_entry.get().strip().rstrip("/")
             credential = self.server_token_entry.get().strip()
             if not url or not credential:
-                self.error_label.configure(text="Podaj adres serwera i kod aktywacyjny od administratora.")
+                self.error_label.configure(text=_("Podaj adres serwera i kod aktywacyjny od administratora."))
                 return
             ok, msg = check_server_url(url)
             if not ok:
@@ -731,18 +787,18 @@ class LoginView(ctk.CTkFrame):
             profile = self.server_profile
 
         if not password:
-            self.error_label.configure(text="Podaj hasło główne sejfu.")
+            self.error_label.configure(text=_("Podaj hasło główne sejfu."))
             return
 
         keyfile_bytes = keyfile if from_hello else None
         if key_path:
             if not os.path.isfile(key_path):
-                self.error_label.configure(text="Wskazany plik-klucz nie istnieje.")
+                self.error_label.configure(text=_("Wskazany plik-klucz nie istnieje."))
                 return
             with open(key_path, "rb") as kf:
                 keyfile_bytes = kf.read()
 
-        self._server_busy(True, "Łączenie z serwerem...")
+        self._server_busy(True, _("Łączenie z serwerem..."))
 
         totp_code, self._enroll_totp = self._enroll_totp, ""
 
@@ -786,7 +842,7 @@ class LoginView(ctk.CTkFrame):
                     self._enroll_totp = code
                     self._do_server_unlock()  # kod aktywacyjny nie został zużyty – ponawiamy z kodem 2FA
                 else:
-                    self.error_label.configure(text="Dodanie urządzenia wymaga kodu 2FA – przerwano.")
+                    self.error_label.configure(text=_("Dodanie urządzenia wymaga kodu 2FA – przerwano."))
                 return
             setup, self._pending_totp_setup = self._pending_totp_setup, None
             if kind in ("ok", "empty") and setup:
@@ -810,8 +866,8 @@ class LoginView(ctk.CTkFrame):
                         pass
                     self.forget_server_profile()
                     self.error_label.configure(
-                        text=f"❌ {value}\nTo urządzenie nie ma już dostępu – lokalna kopia sejfu została usunięta. "
-                             "Poproś administratora o nowy kod aktywacyjny."
+                        text=f"❌ {value}\n" + _("To urządzenie nie ma już dostępu – lokalna kopia sejfu została usunięta. "
+                                                 "Poproś administratora o nowy kod aktywacyjny.")
                     )
                     return
                 self.error_label.configure(text=self._describe_error(value))
@@ -820,19 +876,19 @@ class LoginView(ctk.CTkFrame):
 
     def _setup_user_totp(self, session: SyncSession, setup: dict):
         """Pierwsze urządzenie przy polityce wymagającej 2FA: dodanie konta w aplikacji uwierzytelniającej."""
-        for _ in range(5):
+        for _attempt in range(5):
             code = TotpDialog.setup(self, setup.get("secret", ""), setup.get("uri", ""))
             if not code:
                 break
             try:
                 session.client.confirm_totp(code)
-                messagebox.showinfo("2FA włączone", "Logowanie dwuskładnikowe zostało skonfigurowane. "
-                                                    "Kod z aplikacji będzie potrzebny przy dodawaniu kolejnych urządzeń.")
+                messagebox.showinfo(_("2FA włączone"), _("Logowanie dwuskładnikowe zostało skonfigurowane. "
+                                                         "Kod z aplikacji będzie potrzebny przy dodawaniu kolejnych urządzeń."))
                 return
             except Exception as e:
-                messagebox.showerror("Nieprawidłowy kod", str(e))
-        messagebox.showwarning("2FA nie zostało potwierdzone",
-                               "Konfiguracja 2FA zostanie zaproponowana ponownie przy dodawaniu kolejnego urządzenia.")
+                messagebox.showerror(_("Nieprawidłowy kod"), str(e))
+        messagebox.showwarning(_("2FA nie zostało potwierdzone"),
+                               _("Konfiguracja 2FA zostanie zaproponowana ponownie przy dodawaniu kolejnego urządzenia."))
 
     def forget_server_profile(self):
         """Urządzenie straciło dostęp – wróć do formularza dołączania (adres zostaje wpisany)."""
@@ -842,7 +898,7 @@ class LoginView(ctk.CTkFrame):
             self.server_url_entry.insert(0, url)
         self.server_token_entry.delete(0, "end")
         self._refresh_server_header()
-        self.tabview.set("🌐 Serwer")
+        self.tabview.set(self.TAB_SERVER)
 
     def _remember_profile(self, profile: ServerProfile):
         try:
@@ -865,8 +921,8 @@ class LoginView(ctk.CTkFrame):
         if pinned_fp == fingerprint:
             # Certyfikat jest już zaufany, a połączenie i tak się nie udaje – ponowne pytanie nic nie da
             self.error_label.configure(
-                text="❌ Certyfikat serwera jest zaufany, ale nie pasuje do adresu, pod którym się łączysz. "
-                     "Użyj dokładnie adresu wypisanego przez instalator (np. https://192.168.0.10:8443)."
+                text=_("❌ Certyfikat serwera jest zaufany, ale nie pasuje do adresu, pod którym się łączysz. "
+                       "Użyj dokładnie adresu wypisanego przez instalator (np. https://192.168.0.10:8443).")
             )
             return
         host = (urlparse(profile.url).hostname or "").lower()
@@ -876,25 +932,26 @@ class LoginView(ctk.CTkFrame):
             # Ten serwer miał certyfikat zaufany przez system (Tailscale / publiczne CA). Nagle niezaufany certyfikat
             # to najpewniej przechwycenie połączenia – nie proponujemy „zaufaj temu certyfikatowi”.
             self.error_label.configure(
-                text="❌ Serwer przedstawił certyfikat, któremu system nie ufa, choć wcześniej był on zaufany. "
-                     "Możliwa próba przechwycenia połączenia (np. publiczne Wi-Fi) – połączenie przerwane. "
-                     "Spróbuj z innej sieci lub skontaktuj się z administratorem.")
+                text=_("❌ Serwer przedstawił certyfikat, któremu system nie ufa, choć wcześniej był on zaufany. "
+                       "Możliwa próba przechwycenia połączenia (np. publiczne Wi-Fi) – połączenie przerwane. "
+                       "Spróbuj z innej sieci lub skontaktuj się z administratorem."))
             return
         changed = bool(pinned_fp)
-        title = "⚠️ Certyfikat serwera się zmienił" if changed else "Nowy certyfikat serwera"
-        intro = ("Serwer przedstawił INNY certyfikat niż zapamiętany. Może to oznaczać odnowienie certyfikatu "
-                 "albo próbę przechwycenia połączenia.\n\n") if changed else (
-                 "Serwer używa certyfikatu, którego system nie zna (np. certyfikat samopodpisany "
-                 "albo wewnętrzny certyfikat firmy).\n\n")
+        title = _("⚠️ Certyfikat serwera się zmienił") if changed else _("Nowy certyfikat serwera")
+        intro = _("Serwer przedstawił INNY certyfikat niż zapamiętany. Może to oznaczać odnowienie certyfikatu "
+                  "albo próbę przechwycenia połączenia.") if changed else _(
+                  "Serwer używa certyfikatu, którego system nie zna (np. certyfikat samopodpisany "
+                  "albo wewnętrzny certyfikat firmy).")
         if not messagebox.askyesno(
             title,
-            intro + f"Odcisk SHA-256:\n{fingerprint}\n\n"
-            "Porównaj go z odciskiem podanym przez administratora serwera (instalator / panel administratora "
-            "albo na serwerze: sudo openssl x509 -in /etc/keystead/tls/server.crt -noout -fingerprint -sha256). "
-            "Ufasz temu certyfikatowi?",
+            intro + "\n\n" + _(
+                "Odcisk SHA-256:\n{fingerprint}\n\n"
+                "Porównaj go z odciskiem podanym przez administratora serwera (instalator / panel administratora "
+                "albo na serwerze: sudo openssl x509 -in /etc/keystead/tls/server.crt -noout -fingerprint -sha256). "
+                "Ufasz temu certyfikatowi?", fingerprint=fingerprint),
             icon="warning"
         ):
-            self.error_label.configure(text="Połączenie przerwane – certyfikat serwera nie został zaakceptowany.")
+            self.error_label.configure(text=_("Połączenie przerwane – certyfikat serwera nie został zaakceptowany."))
             return
         profile.ca_file = save_pinned_certificate(profile.url, pem)
         self._pinned_ca[profile.url] = profile.ca_file
@@ -907,9 +964,9 @@ class LoginView(ctk.CTkFrame):
     @staticmethod
     def _describe_error(e: Exception) -> str:
         if isinstance(e, InvalidPasswordOrCorruptDataError):
-            return "❌ Niepoprawne hasło główne (bądź plik klucza)."
+            return _("❌ Niepoprawne hasło główne (bądź plik klucza).")
         if isinstance(e, InvalidVaultHeaderError):
-            return "❌ Sejf na serwerze jest uszkodzony lub w nieznanym formacie."
+            return _("❌ Sejf na serwerze jest uszkodzony lub w nieznanym formacie.")
         return f"❌ {e}"
 
     def _run_bg(self, work, done):
@@ -926,20 +983,20 @@ class LoginView(ctk.CTkFrame):
     def _bootstrap_server(self, session: SyncSession, password: str, keyfile_bytes: Optional[bytes]):
         """Pierwsze użycie pustego serwera: wyślij istniejący sejf albo utwórz nowy."""
         choice = messagebox.askyesnocancel(
-            "Serwer jest pusty",
-            "Na serwerze nie ma jeszcze sejfu.\n\n"
-            "TAK – wyślij istniejący sejf z tego komputera (plik .vault)\n"
-            "NIE – utwórz nowy, pusty sejf na serwerze"
+            _("Serwer jest pusty"),
+            _("Na serwerze nie ma jeszcze sejfu.\n\n"
+              "TAK – wyślij istniejący sejf z tego komputera (plik .vault)\n"
+              "NIE – utwórz nowy, pusty sejf na serwerze")
         )
         if choice is None:
             return
 
         if choice:
             path = filedialog.askopenfilename(
-                title="Wybierz sejf do wysłania na serwer",
+                title=_("Wybierz sejf do wysłania na serwer"),
                 initialfile=os.path.basename(self.recent_vaults[0]) if self.recent_vaults else "",
                 initialdir=os.path.dirname(self.recent_vaults[0]) if self.recent_vaults else None,
-                filetypes=[("Pliki Sejfu", "*.vault"), ("Wszystkie pliki", "*.*")]
+                filetypes=[(_("Pliki Sejfu"), "*.vault"), (_("Wszystkie pliki"), "*.*")]
             )
             if not path:
                 return
@@ -948,18 +1005,18 @@ class LoginView(ctk.CTkFrame):
                 with open(path, "rb") as fh:
                     blob = fh.read()
             except Exception as e:
-                self.error_label.configure(text=self._describe_error(e) + " (hasło musi pasować do wybranego sejfu)")
+                self.error_label.configure(text=self._describe_error(e) + _(" (hasło musi pasować do wybranego sejfu)"))
                 return
         else:
             allowed, policy_msg = check_master_password(password)
             if not allowed:
                 self.error_label.configure(text=policy_msg)
                 return
-            if policy_msg and not messagebox.askyesno("Średnio silne hasło główne", policy_msg + "\n\nUżyć mimo to?", icon="warning"):
+            if policy_msg and not messagebox.askyesno(_("Średnio silne hasło główne"), policy_msg + "\n\n" + _("Użyć mimo to?"), icon="warning"):
                 return
-            blob = encrypt_payload(Vault(name="Mój Sejf").to_json().encode("utf-8"), password, keyfile_bytes)
+            blob = encrypt_payload(Vault(name=_("Mój Sejf")).to_json().encode("utf-8"), password, keyfile_bytes)
 
-        self._server_busy(True, "Wysyłanie sejfu na serwer...")
+        self._server_busy(True, _("Wysyłanie sejfu na serwer..."))
 
         def _work():
             try:

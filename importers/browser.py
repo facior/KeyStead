@@ -7,12 +7,13 @@ import csv
 import os
 from typing import Optional, List
 from importers.base import BaseImporter, ImportResult, ImportItem
+from core.i18n import _
 
 
 class BrowserImporter(BaseImporter):
     @property
     def name(self) -> str:
-        return "Przeglądarki (Chrome / Edge / Firefox CSV)"
+        return _("Przeglądarki (Chrome / Edge / Firefox CSV)")
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -41,20 +42,20 @@ class BrowserImporter(BaseImporter):
                 reader = csv.DictReader(f)
                 for row in reader:
                     url = row.get("url") or row.get("URL") or ""
-                    title = row.get("name") or row.get("Name") or url or "Konto internetowe"
+                    title = row.get("name") or row.get("Name") or url or _("Konto internetowe")
                     username = row.get("username") or row.get("Username") or ""
                     pwd = row.get("password") or row.get("Password") or ""
 
                     result.add_item(ImportItem(
                         title=title,
-                        category="Loginy",
+                        category="Loginy",  # i18n: data
                         username=username,
                         password=pwd,
                         url=url,
                         notes=""
                     ))
         except Exception as e:
-            result.add_error(f"Błąd podczas wczytywania CSV przeglądarki: {str(e)}")
+            result.add_error(_("Błąd podczas wczytywania CSV przeglądarki: {error}", error=e))
 
         result.success = len(result.items) > 0 and len(result.errors) == 0
         return result

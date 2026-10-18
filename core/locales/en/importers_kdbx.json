@@ -1,0 +1,17 @@
+{
+ "Baza KeePass jest uszkodzona (błąd rozpakowania).": "The KeePass database is damaged (decompression error).",
+ "Baza KeePass jest uszkodzona (niezgodna suma kontrolna bloku).": "The KeePass database is damaged (block checksum mismatch).",
+ "Baza KeePass jest zaszyfrowana algorytmem Twofish, którego KeyStead nie obsługuje. Zmień w KeePass szyfrowanie na AES lub ChaCha20 (Plik → Ustawienia bazy → Zabezpieczenia) albo wyeksportuj bazę do XML.": "The KeePass database is encrypted with Twofish, which KeyStead doesn't support. In KeePass, change the encryption to AES or ChaCha20 (File → Database Settings → Security) or export the database to XML.",
+ "Baza KeePass po rozpakowaniu jest zbyt duża – plik odrzucony.": "The KeePass database is too large after decompression – file rejected.",
+ "Baza KeePass zawiera niedozwolone deklaracje XML – plik odrzucony.": "The KeePass database contains forbidden XML declarations – file rejected.",
+ "Błędne hasło główne lub plik klucza bazy KeePass.": "Wrong master password or key file for the KeePass database.",
+ "Błędne hasło lub plik-klucz.": "Wrong password or key file.",
+ "Nie udało się odczytać pliku klucza: {error}": "Could not read the key file: {error}",
+ "Nieobsługiwana wersja bazy KeePass ({version}).": "Unsupported KeePass database version ({version}).",
+ "Nieobsługiwane szyfrowanie pól chronionych w bazie KeePass.": "Unsupported protected-field encryption in the KeePass database.",
+ "Nieznana metoda zabezpieczenia hasła w bazie KeePass.": "Unknown key derivation method in the KeePass database.",
+ "Nieznany algorytm szyfrowania bazy KeePass.": "Unknown encryption algorithm in the KeePass database.",
+ "Plik-klucz KeePass jest uszkodzony (niezgodna suma kontrolna).": "The KeePass key file is damaged (checksum mismatch).",
+ "Uszkodzona zawartość bazy KeePass: {error}": "Damaged KeePass database content: {error}",
+ "Uszkodzony nagłówek bazy KeePass.": "Damaged KeePass database header."
+}

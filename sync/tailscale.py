@@ -17,6 +17,8 @@ from typing import List, Optional
 
 import requests
 
+from core.i18n import _, current_language
+
 _WINDOWS_PATHS = (
     r"C:\Program Files\Tailscale\tailscale.exe",
     r"C:\Program Files (x86)\Tailscale\tailscale.exe",
@@ -65,25 +67,25 @@ def tailscale_running(max_age: float = 60.0) -> bool:
 def _status() -> dict:
     cli = find_tailscale_cli()
     if not cli:
-        raise TailscaleUnavailable("Na tym komputerze nie ma Tailscale. Zainstaluj go z https://tailscale.com/download "
-                                   "albo wpisz adres serwera ręcznie.")
+        raise TailscaleUnavailable(_("Na tym komputerze nie ma Tailscale. Zainstaluj go z https://tailscale.com/download "
+                                     "albo wpisz adres serwera ręcznie."))
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         out = subprocess.run([cli, "status", "--json"], capture_output=True, timeout=10, creationflags=flags)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise TailscaleUnavailable(f"Nie udało się odczytać stanu Tailscale: {e}")
+        raise TailscaleUnavailable(_("Nie udało się odczytać stanu Tailscale: {error}", error=e))
     if out.returncode != 0:
-        raise TailscaleUnavailable("Tailscale nie jest połączony – zaloguj się w aplikacji Tailscale.")
+        raise TailscaleUnavailable(_("Tailscale nie jest połączony – zaloguj się w aplikacji Tailscale."))
     try:
         return json.loads(out.stdout.decode("utf-8", errors="replace"))
     except ValueError:
-        raise TailscaleUnavailable("Nieoczekiwana odpowiedź Tailscale.")
+        raise TailscaleUnavailable(_("Nieoczekiwana odpowiedź Tailscale."))
 
 
 def _probe(name: str, dns_name: str, timeout: float) -> Optional[DiscoveredServer]:
     url = f"https://{dns_name}"
     try:
-        resp = requests.get(f"{url}/api/v1/health", timeout=timeout)
+        resp = requests.get(f"{url}/api/v1/health", headers={"Accept-Language": current_language()}, timeout=timeout)
         data = resp.json() if resp.status_code == 200 else {}
     except (requests.RequestException, ValueError):
         return None
@@ -95,7 +97,7 @@ def _probe(name: str, dns_name: str, timeout: float) -> Optional[DiscoveredServe
 def discover_servers(timeout: float = 4.0) -> List[DiscoveredServer]:
     status = _status()
     if status.get("BackendState") not in (None, "Running"):
-        raise TailscaleUnavailable("Tailscale nie jest połączony – włącz go i spróbuj ponownie.")
+        raise TailscaleUnavailable(_("Tailscale nie jest połączony – włącz go i spróbuj ponownie."))
 
     candidates = []
     nodes = list((status.get("Peer") or {}).values()) + [status.get("Self") or {}]

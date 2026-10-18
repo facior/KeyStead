@@ -15,6 +15,8 @@ import string
 from functools import lru_cache
 from typing import Dict, Any, FrozenSet, List, Tuple
 
+from core.i18n import _
+
 # Zestawy znaków
 LOWERCASE = string.ascii_lowercase
 UPPERCASE = string.ascii_uppercase
@@ -31,7 +33,7 @@ def get_wordlist() -> Tuple[str, ...]:
     with open(_WORDLIST_PATH, "r", encoding="utf-8") as f:
         words = tuple(line.strip() for line in f if line.strip() and not line.startswith("#"))
     if len(words) < 7776:
-        raise RuntimeError("Uszkodzony plik listy słów generatora fraz (wordlist_eff.txt).")
+        raise RuntimeError(_("Uszkodzony plik listy słów generatora fraz (wordlist_eff.txt)."))
     return words
 
 
@@ -84,7 +86,7 @@ def generate_password(
         length = len(guaranteed)
 
     # Dopełnij resztę długości
-    remaining = [secrets.choice(char_pool) for _ in range(length - len(guaranteed))]
+    remaining = [secrets.choice(char_pool) for __ in range(length - len(guaranteed))]
     all_chars = guaranteed + remaining
 
     # Bezpieczne przetasowanie (Fisher-Yates z secrets)
@@ -106,7 +108,7 @@ def generate_passphrase(
     5 słów ≈ 64.6 bita, 6 słów ≈ 77.5 bita entropii (+ ~8 bitów za liczbę).
     """
     words = get_wordlist()
-    chosen_words = [secrets.choice(words) for _ in range(max(1, word_count))]
+    chosen_words = [secrets.choice(words) for __ in range(max(1, word_count))]
     if capitalize:
         chosen_words = [w.capitalize() for w in chosen_words]
 
@@ -192,7 +194,7 @@ def _find_patterns(password: str) -> List[Tuple[int, int, float, str]]:
             while start != -1:
                 seg = password[start:start + len(word)]
                 bits = math.log2(len(COMMON_PASSWORDS)) + (1 if any(c.isupper() for c in seg) else 0) + (1 if text is leet and seg.lower() != word else 0)
-                found.append((start, start + len(word), bits, "popularne hasło"))
+                found.append((start, start + len(word), bits, "popularne hasło"))  # i18n: data
                 start = text.find(word, start + 1)
 
     # 2. Słowa ze słownika (min. 4 litery)
@@ -201,7 +203,7 @@ def _find_patterns(password: str) -> List[Tuple[int, int, float, str]]:
     for i in range(n):
         for j in range(min(n, i + 12), i + 3, -1):
             if leet[i:j] in words or lower[i:j] in words:
-                found.append((i, j, BITS_PER_WORD + (1 if any(c.isupper() for c in password[i:j]) else 0), "słowo"))
+                found.append((i, j, BITS_PER_WORD + (1 if any(c.isupper() for c in password[i:j]) else 0), "słowo"))  # i18n: data
                 break
 
     # 3. Lata i daty
@@ -228,7 +230,7 @@ def _find_patterns(password: str) -> List[Tuple[int, int, float, str]]:
     # 5. Powtórzenia: aaaa, abcabc
     for m in re.finditer(r"(.+?)\1{2,}|(.{2,}?)\2+", password):
         unit = m.group(1) or m.group(2)
-        found.append((m.start(), m.end(), len(unit) * math.log2(_char_pool_size(unit)) + math.log2(len(m.group(0)) / len(unit) + 1), "powtórzenie"))
+        found.append((m.start(), m.end(), len(unit) * math.log2(_char_pool_size(unit)) + math.log2(len(m.group(0)) / len(unit) + 1), "powtórzenie"))  # i18n: data
 
     return found
 
@@ -244,10 +246,10 @@ def _estimate_bits(password: str) -> float:
         if best[i] == math.inf:
             continue
         best[i + 1] = min(best[i + 1], best[i] + pool_bits)
-        for start, end, bits, _ in patterns:
+        for start, end, bits, __ in patterns:
             if start == i:
                 best[end] = min(best[end], best[i] + bits)
-    matched = sum(1 for p in patterns if p[3] in ("popularne hasło", "słowo"))
+    matched = sum(1 for p in patterns if p[3] in ("popularne hasło", "słowo"))  # i18n: data
     # Atakujący musi też zgadnąć strukturę (kolejność i liczbę elementów)
     return best[n] + (math.log2(matched + 1) if matched else 0.0)
 
@@ -260,10 +262,10 @@ def evaluate_password_strength(password: str) -> Dict[str, Any]:
     if not password:
         return {
             "score": 0,
-            "label": "Brak hasła",
+            "label": _("Brak hasła"),
             "color": "#e74c3c",
             "entropy": 0.0,
-            "feedback": ["Wprowadź hasło."]
+            "feedback": [_("Wprowadź hasło.")]
         }
 
     # Fraza ze słownika: atakujący zgaduje słowa, nie pojedyncze znaki
@@ -283,24 +285,24 @@ def evaluate_password_strength(password: str) -> Dict[str, Any]:
         score = 4
 
     labels = {
-        0: ("Bardzo słabe", "#e74c3c"),
-        1: ("Słabe", "#e67e22"),
-        2: ("Średnie", "#f1c40f"),
-        3: ("Silne", "#2ecc71"),
-        4: ("Bardzo silne", "#27ae60")
+        0: (_("Bardzo słabe"), "#e74c3c"),
+        1: (_("Słabe"), "#e67e22"),
+        2: (_("Średnie"), "#f1c40f"),
+        3: (_("Silne"), "#2ecc71"),
+        4: (_("Bardzo silne"), "#27ae60")
     }
 
     kinds = {p[3] for p in _find_patterns(password)} if not phrase_bits else set()
     if phrase_bits and score < 3:
-        feedback.append("Fraza ma za mało słów – użyj co najmniej 5 losowych słów.")
-    if "popularne hasło" in kinds:
-        feedback.append("Zawiera popularne hasło – jest w słownikach ataków.")
+        feedback.append(_("Fraza ma za mało słów – użyj co najmniej 5 losowych słów."))
+    if "popularne hasło" in kinds:  # i18n: data
+        feedback.append(_("Zawiera popularne hasło – jest w słownikach ataków."))
     if "rok" in kinds:
-        feedback.append("Lata i daty łatwo zgadnąć.")
-    if "sekwencja" in kinds or "powtórzenie" in kinds:
-        feedback.append("Unikaj sekwencji (abc, 123, qwerty) i powtórzeń.")
+        feedback.append(_("Lata i daty łatwo zgadnąć."))
+    if "sekwencja" in kinds or "powtórzenie" in kinds:  # i18n: data
+        feedback.append(_("Unikaj sekwencji (abc, 123, qwerty) i powtórzeń."))
     if score < 3 and len(password) < 14:
-        feedback.append("Wydłuż hasło – najlepiej do 16+ losowych znaków lub 5-6 losowych słów.")
+        feedback.append(_("Wydłuż hasło – najlepiej do 16+ losowych znaków lub 5-6 losowych słów."))
 
     label, color = labels[score]
     return {
@@ -323,14 +325,15 @@ def check_master_password(password: str) -> Tuple[bool, str]:
     - (True, "")          – hasło silne.
     """
     if len(password) < MASTER_MIN_LENGTH:
-        return False, f"Hasło główne musi mieć co najmniej {MASTER_MIN_LENGTH} znaków."
+        return False, _("Hasło główne musi mieć co najmniej {n} znaków.", n=MASTER_MIN_LENGTH)
     res = evaluate_password_strength(password)
     if res["score"] < 2:
         hint = " ".join(res["feedback"])
-        return False, f"Hasło główne jest zbyt słabe ({res['label']}, ~{res['entropy']} bitów). {hint}".strip()
+        return False, _("Hasło główne jest zbyt słabe ({label}, ~{bits} bitów). {hint}", label=res['label'],
+                               bits=res['entropy'], hint=hint).strip()
     if res["score"] == 2:
         return True, (
-            f"Hasło główne ma średnią siłę (~{res['entropy']} bitów). Jeśli ktoś przechwyci plik sejfu, "
-            "będzie mógł próbować łamać je offline. Zalecamy frazę z 5-6 losowych słów."
+            _("Hasło główne ma średnią siłę (~{bits} bitów). Jeśli ktoś przechwyci plik sejfu, "
+              "będzie mógł próbować łamać je offline. Zalecamy frazę z 5-6 losowych słów.", bits=res['entropy'])
         )
     return True, ""

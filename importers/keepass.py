@@ -8,15 +8,16 @@ import xml.etree.ElementTree as ET
 from typing import Optional, List
 from importers.base import BaseImporter, ImportResult, ImportItem
 from core.totp_service import parse_otpauth_uri, sanitize_secret
+from core.i18n import _
 
-try:
-    from pykeepass import PyKeePass
-    HAS_PYKEEPASS = True
-except ImportError:
-    HAS_PYKEEPASS = False
+from importers.kdbx import KdbxError, KdbxPasswordError, open_kdbx
 
-# Limity parametrów funkcji wyprowadzania klucza z nagłówka .kdbx – sprawdzane PRZED otwarciem bazy, bo
-# pykeepass liczy klucz jeszcze przed weryfikacją hasła (złośliwy plik mógłby zawiesić aplikację lub zająć GB RAM).
+# Pola KeePassa przenoszone do zwykłych pól wpisu (reszta trafia do pól niestandardowych)
+STANDARD_FIELDS = ("Title", "UserName", "Password", "URL", "Notes")
+OTP_FIELDS = ("otp", "TOTP Seed", "TimeOtp-Secret-Base32")  # KeePassXC, wtyczka KeeOtp, KeePass 2.47+
+
+# Limity parametrów funkcji wyprowadzania klucza z nagłówka .kdbx – sprawdzane PRZED otwarciem bazy, bo klucz
+# liczony jest jeszcze przed weryfikacją hasła (złośliwy plik mógłby zawiesić aplikację lub zająć GB RAM).
 # Domyślne wartości KeePass/KeePassXC są wielokrotnie mniejsze.
 MAX_KDBX_FILE_BYTES = 200 * 1024 * 1024
 MAX_AES_ROUNDS = 50_000_000
@@ -55,12 +56,12 @@ def check_kdbx_header(path: str) -> str:
     import struct
     try:
         if os.path.getsize(path) > MAX_KDBX_FILE_BYTES:
-            return "Plik bazy KeePass jest zbyt duży."
+            return _("Plik bazy KeePass jest zbyt duży.")
         with open(path, "rb") as f:
             head = f.read(64 * 1024)
         sig1, sig2, minor, major = struct.unpack_from("<IIHH", head, 0)
         if (sig1, sig2) != _KDBX_SIG:
-            return "To nie jest baza KeePass (.kdbx)."
+            return _("To nie jest baza KeePass (.kdbx).")
         pos, wide = 12, major >= 4
         while pos < len(head):
             fid = head[pos]
@@ -76,17 +77,17 @@ def check_kdbx_header(path: str) -> str:
                 break
             if fid == 6 and len(data) == 8:  # KDBX3: TransformRounds (AES-KDF)
                 if int.from_bytes(data, "little") > MAX_AES_ROUNDS:
-                    return "Baza KeePass ma nierealnie dużą liczbę rund szyfrowania – plik odrzucony."
+                    return _("Baza KeePass ma nierealnie dużą liczbę rund szyfrowania – plik odrzucony.")
             if fid == 11:  # KDBX4: KdfParameters
                 params = _variant_dict(data)
                 if int(params.get("R", 0)) > MAX_AES_ROUNDS:
-                    return "Baza KeePass ma nierealnie dużą liczbę rund szyfrowania – plik odrzucony."
+                    return _("Baza KeePass ma nierealnie dużą liczbę rund szyfrowania – plik odrzucony.")
                 if (int(params.get("M", 0)) > MAX_ARGON2_MEMORY or int(params.get("I", 0)) > MAX_ARGON2_ITERATIONS
                         or int(params.get("P", 0)) > MAX_ARGON2_PARALLELISM):
-                    return "Baza KeePass wymaga nierealnie dużo pamięci lub obliczeń (Argon2) – plik odrzucony."
+                    return _("Baza KeePass wymaga nierealnie dużo pamięci lub obliczeń (Argon2) – plik odrzucony.")
         return ""
     except (OSError, struct.error, IndexError, ValueError):
-        return "Nie udało się odczytać nagłówka bazy KeePass – plik jest uszkodzony."
+        return _("Nie udało się odczytać nagłówka bazy KeePass – plik jest uszkodzony.")
 
 
 class KeePassImporter(BaseImporter):
@@ -128,18 +129,15 @@ class KeePassImporter(BaseImporter):
 
         try:
             if ext == ".kdbx":
-                if not HAS_PYKEEPASS:
-                    result.add_error("Biblioteka pykeepass nie jest zainstalowana.")
-                    return result
                 self._parse_kdbx(file_path, password, keyfile_path, result)
             elif ext == ".xml":
                 self._parse_xml(file_path, result)
             elif ext == ".csv":
                 self._parse_csv(file_path, result)
             else:
-                result.add_error(f"Nieobsługiwane rozszerzenie: {ext}")
+                result.add_error(_("Nieobsługiwane rozszerzenie: {ext}", ext=ext))
         except Exception as e:
-            result.add_error(f"Błąd podczas wczytywania pliku KeePass: {str(e)}")
+            result.add_error(_("Błąd podczas wczytywania pliku KeePass: {error}", error=e))
 
         result.success = len(result.items) > 0 and len(result.errors) == 0
         return result
@@ -152,7 +150,7 @@ class KeePassImporter(BaseImporter):
         result: ImportResult
     ) -> None:
         if not password and not keyfile_path:
-            result.add_error("Do otwarcia bazy KeePass (.kdbx) wymagane jest hasło lub plik klucza.")
+            result.add_error(_("Do otwarcia bazy KeePass (.kdbx) wymagane jest hasło lub plik klucza."))
             return
 
         problem = check_kdbx_header(file_path)
@@ -160,52 +158,50 @@ class KeePassImporter(BaseImporter):
             result.add_error(problem)
             return
 
+        keyfile = None
+        if keyfile_path:
+            try:
+                with open(keyfile_path, "rb") as f:
+                    keyfile = f.read(10 * 1024 * 1024)
+            except OSError as e:
+                result.add_error(_("Nie udało się odczytać pliku klucza: {error}", error=e))
+                return
         try:
-            kp = PyKeePass(filename=file_path, password=password, keyfile=keyfile_path)
+            with open(file_path, "rb") as f:
+                db = open_kdbx(f.read(), password, keyfile)
+        except KdbxPasswordError:
+            result.add_error(_("Błędne hasło główne lub plik klucza bazy KeePass."))
+            return
+        except KdbxError as e:
+            result.add_error(str(e))
+            return
         except Exception as e:
-            result.add_error(f"Błędne hasło główne lub uszkodzona baza KeePass: {str(e)}")
+            result.add_error(_("Błędne hasło główne lub uszkodzona baza KeePass: {error}", error=e))
             return
 
-        for entry in kp.entries:
-            # Pomijamy wpisy z kosza jeśli istnieją
-            if entry.group and entry.group.name and "Recycle" in entry.group.name:
-                continue
-
-            title = entry.title or "Bez tytułu"
-            username = entry.username or ""
-            pwd = entry.password or ""
-            url = entry.url or ""
-            notes = entry.notes or ""
-            group_name = entry.group.name if (entry.group and entry.group.name != "Root") else "Loginy"
-            tags = [t.strip() for t in (entry.tags or []) if t.strip()]
-
-            # Odczyt TOTP
+        for entry in db.entries:  # wpisy z kosza KeePassa są już pominięte
+            f = entry.fields
             totp = ""
-            if hasattr(entry, "otp") and entry.otp:
-                raw_otp = str(entry.otp)
-                if raw_otp.startswith("otpauth://"):
-                    parsed = parse_otpauth_uri(raw_otp)
-                    totp = parsed[0] if parsed else raw_otp
-                else:
-                    totp = sanitize_secret(raw_otp)
-
-            custom_fields = {}
-            if hasattr(entry, "custom_properties") and entry.custom_properties:
-                for k, v in entry.custom_properties.items():
-                    if k and v is not None and k.lower() not in ["otp", "totp seed"]:
-                        custom_fields[str(k)] = str(v)
-                    elif k.lower() in ["otp", "totp seed"] and not totp:
-                        totp = sanitize_secret(str(v))
-
+            for name in OTP_FIELDS:
+                raw = (f.get(name) or "").strip()
+                if raw:
+                    if raw.startswith("otpauth://"):
+                        parsed = parse_otpauth_uri(raw)
+                        totp = parsed[0] if parsed else raw
+                    else:
+                        totp = sanitize_secret(raw)
+                    break
+            custom_fields = {k: v for k, v in f.items()
+                             if k not in STANDARD_FIELDS and k not in OTP_FIELDS and not k.startswith("TimeOtp-")}
             result.add_item(ImportItem(
-                title=title,
-                category=group_name,
-                username=username,
-                password=pwd,
-                url=url,
+                title=f.get("Title") or _("Bez tytułu"),
+                category=entry.group or "Loginy",  # i18n: data
+                username=f.get("UserName", ""),
+                password=f.get("Password", ""),
+                url=f.get("URL", ""),
                 totp_secret=totp,
-                notes=notes,
-                tags=tags,
+                notes=f.get("Notes", ""),
+                tags=entry.tags,
                 custom_fields=custom_fields
             ))
 
@@ -227,7 +223,7 @@ class KeePassImporter(BaseImporter):
                     val_text = val_el.text if val_el is not None and val_el.text else ""
                     field_dict[key_el.text] = val_text
 
-            title = field_dict.get("Title", "Bez tytułu")
+            title = field_dict.get("Title", _("Bez tytułu"))
             username = field_dict.get("UserName", "")
             password = field_dict.get("Password", "")
             url = field_dict.get("URL", "")
@@ -249,7 +245,7 @@ class KeePassImporter(BaseImporter):
 
             result.add_item(ImportItem(
                 title=title,
-                category="Loginy",
+                category="Loginy",  # i18n: data
                 username=username,
                 password=password,
                 url=url,
@@ -262,12 +258,12 @@ class KeePassImporter(BaseImporter):
         with open(file_path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                title = row.get("Account") or row.get("Title") or "Bez tytułu"
+                title = row.get("Account") or row.get("Title") or _("Bez tytułu")
                 username = row.get("Login Name") or row.get("Username") or ""
                 password = row.get("Password") or ""
                 url = row.get("Web Site") or row.get("URL") or ""
                 notes = row.get("Comments") or row.get("Notes") or ""
-                group = row.get("Group") or "Loginy"
+                group = row.get("Group") or "Loginy"  # i18n: data
 
                 result.add_item(ImportItem(
                     title=title,
