@@ -1695,6 +1695,13 @@ class SettingsDrawerView(ctk.CTkFrame):
                       fg_color=COLOR_PRIMARY, command=rec["on_create"]).pack(side="left")
         if rec.get("has_code"):
             ctk.CTkButton(row, text=_("Usuń kod"), fg_color=COLOR_PANEL_DARK, command=rec["on_remove"]).pack(side="left", padx=8)
+        if rec.get("on_card"):
+            card_row = layout_frame(card)
+            card_row.pack(fill="x", padx=15, pady=(0, 8))
+            ctk.CTkButton(card_row, text=_("🖨 Karta awaryjna (PDF)"), fg_color=COLOR_SUCCESS,
+                          command=rec["on_card"]).pack(side="left")
+            ctk.CTkLabel(card_row, text=_("do wydruku – dla Ciebie i bliskich"), font=FONT_SMALL,
+                         text_color=COLOR_TEXT_MUTED).pack(side="left", padx=8)
         if rec.get("org_key_id"):
             org = _("🏢 Odzyskiwanie przez firmę: włączone (odcisk klucza {fingerprint})", fingerprint=rec['org_key_id'])
         elif rec.get("org_policy"):

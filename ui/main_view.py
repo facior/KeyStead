@@ -173,6 +173,11 @@ class MainView(ctk.CTkFrame):
         else:
             self.floating_btn.pack_forget()
             self._close_floating_panel()
+        if "family_share" in enabled:
+            if not self.family_btn.winfo_manager():
+                self.family_btn.pack(side="left", padx=3, before=self.settings_btn)
+        else:
+            self.family_btn.pack_forget()
         if "expiry" not in enabled:
             self.expiry_filter = False
         self._build_sidebar()
@@ -249,6 +254,41 @@ class MainView(ctk.CTkFrame):
             return
         SecureSendDialog(self, entry, self.sync_session, self.vault.settings, self._run_in_background,
                          on_sent=lambda: self._save_vault_to_disk(trigger_backup=False))
+
+    def _send_to_phone(self, entry: VaultEntry):
+        from ui.plugin_dialogs import PhoneHandoffDialog
+        poster = getattr(self.winfo_toplevel(), "post_to_ui", None) or (lambda fn: self.after(0, fn))
+        PhoneHandoffDialog(self, entry, poster)
+
+    def _family_name(self) -> str:
+        from core import family_share
+        ident = self.vault.settings.get(family_share.IDENTITY_KEY)
+        return (ident or {}).get("name") or self.vault.name
+
+    def _open_family_dialog(self):
+        from ui.family_view import FamilyDrawerView
+
+        def _received(entry: VaultEntry):
+            self.drawer.close()
+            self._build_sidebar()
+            self._refresh_entries_list()
+            self._select_entry(entry.id)
+            self.show_toast(_("👪 Dodano wpis „{title}”", title=entry.title))
+
+        self.drawer.open(_("Domownicy"), _("Wysyłaj hasła bliskim bez serwera i chmury"),
+                         build=lambda c: FamilyDrawerView(c, vault=self.vault,
+                                                          on_saved=lambda: self._save_vault_to_disk(trigger_backup=False),
+                                                          on_received=_received, copy_text=self._copy_share_text))
+
+    def _copy_share_text(self, text: str):
+        # Wizytówki i paczki są zaszyfrowane / publiczne – schowek czyszczony po 5 minutach, żeby zdążyć wkleić
+        SecureClipboard.copy(text, timeout_seconds=300)
+        self.show_toast(_("Skopiowano – wklej w wiadomości"))
+
+    def _send_to_family(self, entry: VaultEntry):
+        from ui.family_view import SendShareDialog
+        SendShareDialog(self, self.vault, entry, self._family_name(), copy_text=self._copy_share_text,
+                        on_sent=lambda: self._save_vault_to_disk(trigger_backup=False))
 
     def _toggle_floating_panel(self):
         if self._floating_panel is not None and self._floating_panel.winfo_exists():
@@ -546,6 +586,17 @@ class MainView(ctk.CTkFrame):
 
         btn = ctk.CTkButton(
             self.actions_box,
+            text=_("🚨 Ratunek"),
+            fg_color=COLOR_DANGER,
+            hover_color="#e11d48",
+            width=95,
+            command=self._open_rescue_dialog
+        )
+        btn.pack(side="left", padx=3)
+        self._toolbar_buttons.append((btn, _("🚨 Ratunek"), "🚨", 95, 36))
+
+        btn = ctk.CTkButton(
+            self.actions_box,
             text=_("☁️ Kopie i Chmura"),
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
@@ -576,6 +627,15 @@ class MainView(ctk.CTkFrame):
             command=self._toggle_floating_panel
         )
 
+        self.family_btn = ctk.CTkButton(
+            self.actions_box,
+            text="👪",
+            fg_color=COLOR_CARD_DARK,
+            hover_color=COLOR_CARD_HOVER,
+            width=36,
+            command=self._open_family_dialog
+        )
+
         self.settings_btn = ctk.CTkButton(
             self.actions_box,
             text="⚙️",
@@ -587,6 +647,8 @@ class MainView(ctk.CTkFrame):
         self.settings_btn.pack(side="left", padx=3)
         if self.plugin_on("floating_panel"):
             self.floating_btn.pack(side="left", padx=3, before=self.settings_btn)
+        if self.plugin_on("family_share"):
+            self.family_btn.pack(side="left", padx=3, before=self.settings_btn)
 
         ctk.CTkButton(
             self.actions_box,
@@ -1183,6 +1245,9 @@ class MainView(ctk.CTkFrame):
                         title_col.pack(side="left", fill="x", expand=True)
                 title_lbl.configure(wraplength=max(120, event.width - (0 if narrow else btn_actions.winfo_reqwidth() + 16)))
             container.bind("<Configure>", _header_layout, add="+")
+            if self.plugin_on("family_share"):
+                FlatButton(btn_actions, text=_("👪 Udostępnij"), width=95, fg_color=COLOR_CARD_DARK,
+                           hover_color=COLOR_CARD_HOVER, command=lambda: self._send_to_family(current())).pack(side="left", padx=3)
             if self.plugin_on("connect") and connect.protocol_of(entry.url):
                 FlatButton(btn_actions, text=_("🖥️ Połącz"), width=80, fg_color=COLOR_SUCCESS,
                            command=lambda: self._connect(current())).pack(side="left", padx=3)
@@ -1248,6 +1313,9 @@ class MainView(ctk.CTkFrame):
             if self.plugin_on("pick_chars"):
                 FlatButton(p_acts, text=_("🔢 Znaki"), width=70, height=28, fg_color=COLOR_PANEL_DARK,
                            command=lambda: self._pick_password_chars(current())).pack(side="left", padx=(5, 0))
+            if self.plugin_on("phone_handoff"):
+                FlatButton(p_acts, text=_("📱 Telefon"), width=82, height=28, fg_color=COLOR_PANEL_DARK,
+                           command=lambda: self._send_to_phone(current())).pack(side="left", padx=(5, 0))
             if self.plugin_on("secure_send"):
                 FlatButton(p_acts, text=_("✉ Link"), width=62, height=28, fg_color=COLOR_PANEL_DARK,
                            command=lambda: self._secure_send(current())).pack(side="left", padx=(5, 0))
@@ -1739,8 +1807,17 @@ class MainView(ctk.CTkFrame):
         self.drawer.open(_("Nowy Wpis"), _("Wprowadź dane nowego konta lub usługi"), build=_build)
 
     def _open_edit_entry_dialog(self, entry: VaultEntry):
+        password_before = entry.password
+
         def _build(container):
             def _on_save(saved_entry):
+                if self.plugin_on("family_share") and saved_entry.password != password_before:
+                    from core import family_share
+                    people = [i.get("name", "") for i in family_share.shared_with(self.vault.settings, saved_entry.id)]
+                    if people:
+                        self.after(600, lambda: self.show_toast(_("👪 To hasło udostępniłeś: {names} – wyślij im "
+                                                                  "aktualizację (przycisk „Udostępnij”)",
+                                                                  names=", ".join(people))))
                 self.vault.add_category(saved_entry.category)
                 self._save_vault_to_disk()
                 self.drawer.close()
@@ -1785,6 +1862,27 @@ class MainView(ctk.CTkFrame):
                             on_settings_changed=lambda: self._save_vault_to_disk(trigger_backup=False))
 
         self.drawer.open(_("Centrum Audytu Bezpieczeństwa"), _("Monitor wycieków Have I Been Pwned i higiena haseł"), build=_build)
+
+    def _open_rescue_dialog(self, entry_id: Optional[str] = None):
+        """Centrum ratunkowe: mapa domina kont i kreator „Ktoś przejął moje konto!”."""
+        from ui.rescue_view import RescueDrawerView
+        breached = set(getattr(self.winfo_toplevel(), "known_breached_ids", lambda: [])())
+
+        def _saved():
+            self._save_vault_to_disk(trigger_backup=False)
+            if self.selected_entry_id and not self.trash_mode:
+                self._render_entry_details(self.selected_entry_id)
+
+        def _select(eid: str):
+            self.drawer.close()
+            self._select_entry(eid)
+
+        self.drawer.open(_("Centrum ratunkowe"), _("Co się stanie, gdy ktoś przejmie Twój e-mail – i co zrobić, gdy już to zrobił"),
+                         build=lambda c: RescueDrawerView(c, vault=self.vault, breached_ids=breached, on_select_entry=_select,
+                                                          on_save=_saved, copy_secret=self._copy_password_safe,
+                                                          open_url=self._open_url, start_entry_id=entry_id,
+                                                          on_emergency_card=getattr(self.winfo_toplevel(),
+                                                                                    "create_emergency_card", None)))
 
     def _open_backup_dialog(self):
         if not personal_backups_allowed(self.policy):

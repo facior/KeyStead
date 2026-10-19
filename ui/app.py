@@ -757,6 +757,54 @@ class PasswordManagerApp(ctk.CTk):
         RecoveryCodeDialog(self, code, vault.name).wait()
         view.show_toast(_("🔑 Kod odzyskiwania zapisany w sejfie"))
 
+    def create_emergency_card(self):
+        """Karta awaryjna (PDF do wydruku) – opcjonalnie z nowym kodem odzyskiwania."""
+        from tkinter import filedialog
+        from core.emergency_card import CardInfo, save_pdf
+        from core.version import APP_REPOSITORY_URL
+        from ui.recovery_ui import EmergencyCardDialog
+        view, vault = self._current_view, self.current_vault
+        if not isinstance(view, MainView) or vault is None:
+            return
+        ring = vault.keyring
+        options = EmergencyCardDialog(self, has_recovery=bool(ring and ring.has_recovery_code)).wait()
+        if not options:
+            return
+        path = filedialog.asksaveasfilename(title=_("Zapisz kartę awaryjną"), defaultextension=".pdf",
+                                            initialfile=_("KeyStead - karta awaryjna.pdf"),
+                                            filetypes=[("PDF", "*.pdf")], parent=self)
+        if not path:
+            return
+        code = ""
+        if options["new_code"]:
+            if not self._confirm_master_password(_("Aby utworzyć nowy kod odzyskiwania, wpisz hasło główne:")):
+                return
+            ring = self._ensure_keyring()
+            code = ring.add_recovery_code()
+            view._save_vault_to_disk(trigger_backup=False)
+        session = self.sync_session
+        info = CardInfo(
+            vault_name=vault.name,
+            mode="server" if session else "file",
+            location=session.profile.url if session else (self.vault_file_path or ""),
+            account=(getattr(session.profile, "account_name", "") or "") if session else "",
+            keyfile=bool(self.keyfile_bytes), yubikey=bool(ring and ring.yubikey), recovery_code=code,
+            has_recovery=bool(ring and ring.has_recovery_code), org_recovery=bool(ring and ring.org_key_id),
+            download_url=f"{session.profile.url.rstrip('/')}/download" if session else APP_REPOSITORY_URL + "/releases/latest",
+            password_box=options["password_box"])
+        try:
+            save_pdf(info, path)
+        except Exception as e:
+            messagebox.showerror(_("Karta awaryjna"), _("Nie udało się zapisać karty: {error}", error=e), parent=self)
+            if code:
+                RecoveryCodeDialog(self, code, vault.name).wait()  # nowy kod musi trafić do użytkownika
+            return
+        view.show_toast(_("🖨 Karta awaryjna zapisana – wydrukuj ją i schowaj w bezpiecznym miejscu"))
+        try:
+            os.startfile(path)
+        except OSError:
+            pass
+
     def remove_recovery_code(self):
         view, vault = self._current_view, self.current_vault
         if not isinstance(view, MainView) or vault is None or vault.keyring is None:
@@ -775,6 +823,11 @@ class PasswordManagerApp(ctk.CTk):
             view.show_yubikey_hint()
         elif isinstance(view, MainView) and view.winfo_exists():
             view.show_toast(_("🔑 Dotknij YubiKey…"))
+
+    def known_breached_ids(self) -> list:
+        """Wpisy, których hasła były w znanych wyciekach (ostatnie sprawdzenie monitora wycieków)."""
+        target = self.quick_unlock_target()
+        return Watchtower(target).known_breached() if target else []
 
     def yubikey_state(self) -> dict:
         ring = self.current_vault.keyring if self.current_vault else None
@@ -918,6 +971,7 @@ class PasswordManagerApp(ctk.CTk):
                 "org_policy": bool(self.current_policy().get("recovery_public_key")),
                 "on_create": self.create_recovery_code,
                 "on_remove": self.remove_recovery_code,
+                "on_card": self.create_emergency_card,
                 "on_admin_tools": self.open_admin_tools,
             },
             "hello_available": bool(quick.available),

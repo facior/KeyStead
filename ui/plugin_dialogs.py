@@ -204,6 +204,70 @@ class PickCharsDialog(_Dialog):
         self.on_copy("".join(self.password[i] for i in self.selected), _("Skopiowano wybrane znaki!"))
 
 
+class PhoneHandoffDialog(_Dialog):
+    """Hasło na telefon przez Wi-Fi: kod QR z adresem w sieci lokalnej, odliczanie, stan odbioru."""
+
+    def __init__(self, master, entry: VaultEntry, poster: Callable[[Callable[[], None]], None]):
+        from core.phone_handoff import HandoffError, HandoffServer, LIFETIME_SECONDS
+        super().__init__(master, _("Hasło na telefon – {title}", title=entry.title))
+        self._remaining = LIFETIME_SECONDS
+        self.server = None
+        body = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK)
+        body.pack(padx=18, pady=14)
+        ctk.CTkLabel(body, text=_("📱 Zeskanuj kod aparatem telefonu"), font=FONT_SUBTITLE,
+                     text_color=COLOR_TEXT_PRIMARY).pack()
+        try:
+            # Wątki serwera nie mogą wołać Tk – wyniki przechodzą przez kolejkę wątku interfejsu (poster)
+            self.server = HandoffServer(entry.title, entry.password,
+                                        on_fetched=lambda: poster(self._fetched),
+                                        on_closed=lambda reason: poster(lambda: self._closed(reason))).start()
+        except (HandoffError, OSError) as e:
+            ctk.CTkLabel(body, text=_("Nie udało się uruchomić: {error}", error=e), font=FONT_BODY,
+                         text_color=COLOR_WARNING, wraplength=320).pack(pady=12)
+            ctk.CTkButton(body, text=_("Zamknij"), fg_color=COLOR_CARD_DARK, command=self.destroy).pack(pady=(4, 0))
+            self.center_on(master)
+            return
+        img = qr.make_image(self.server.url, scale=6)
+        self._image = ctk.CTkImage(light_image=img, dark_image=img, size=(min(300, img.width),) * 2)
+        ctk.CTkLabel(body, text="", image=self._image).pack(pady=10)
+        ctk.CTkLabel(body, text=_("Telefon musi być w tej samej sieci Wi-Fi co komputer. Hasło przejdzie zaszyfrowane – "
+                                  "klucz jest tylko w tym kodzie. Przy pierwszym użyciu Windows może zapytać o zgodę "
+                                  "na dostęp do sieci – kliknij „Zezwól”."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=320, justify="left").pack()
+        self.status_lbl = ctk.CTkLabel(body, text="", font=FONT_BODY_BOLD, text_color=COLOR_WARNING)
+        self.status_lbl.pack(pady=(8, 0))
+        ctk.CTkButton(body, text=_("Zamknij"), fg_color=COLOR_CARD_DARK, command=self.destroy).pack(pady=(8, 0))
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self._tick()
+        self.center_on(master)
+
+    def _tick(self):
+        if not self.winfo_exists() or self.server is None or self.server.fetched:
+            return
+        if self._remaining <= 0:
+            return
+        self.status_lbl.configure(text=_("Czekam na telefon… {seconds} s", seconds=self._remaining))
+        self._remaining -= 1
+        self.after(1000, self._tick)
+
+    def _fetched(self):
+        if self.winfo_exists():
+            self.status_lbl.configure(text=_("✓ Telefon odebrał hasło"), text_color=COLOR_SUCCESS)
+            self.after(2500, lambda: self.winfo_exists() and self.destroy())
+
+    def _closed(self, reason: str):
+        if self.winfo_exists() and reason in ("timeout", "attack"):
+            self.status_lbl.configure(text=_("Czas minął – kod przestał działać.") if reason == "timeout" else
+                                      _("Wykryto podejrzane próby w sieci – udostępnianie przerwane."),
+                                      text_color=COLOR_WARNING)
+
+    def destroy(self):
+        if self.server is not None:
+            self.server.on_closed = None
+            self.server.close()
+        super().destroy()
+
+
 class SecureSendDialog(_Dialog):
     """Jednorazowy link do hasła: wybór pól, ważność, opcjonalne hasło do linku; lista wysłanych linków."""
     STATES = {"active": N_("czeka na otwarcie"), "opened": N_("✓ otwarty"), "revoked": N_("odwołany"),

@@ -145,7 +145,19 @@ company can block any of them through a server policy.
 | **Secure password link** | A one-time link for someone outside KeyStead. The app encrypts the content and the key travels only in the part of the link after `#`, so the company server can't read it. Opening the page doesn't use up the link; clicking **Show** does. Optional extra password, max. 5 attempts. Needs a KeyStead Server. |
 | **YubiKey** | The master password plus a touch of your YubiKey (HMAC-SHA1 challenge-response, slot 2) is needed to open the vault, also with Windows Hello. A recovery code is required first; it stays the way back if the key is lost. |
 
+| **Sharing with family** | Send an entry (e.g. the Netflix or Wi-Fi password) to someone at home without a server or cloud. Each person exchanges a "card" (public key, text or QR) once; the encrypted package can only be opened by that person's KeyStead and shows a verified sender. Sending again updates their copy. |
+| **Password to phone** | A QR code next to a password: scan it and the password appears briefly in the phone's browser, sent encrypted over your home Wi-Fi (the key never leaves the QR code). No app, no cloud; the link works once and for 60 seconds. |
+
 Coming later: passkeys (needs Windows 11).
+
+### 🚨 Rescue centre
+- **Domino map:** shows which e-mail inbox can reset which accounts ("38 accounts, including 2 banks, depend on this
+  Gmail") and what to fix first – 2FA, a weak or reused mailbox password, breaches.
+- **"Someone took over my account!"** – a step-by-step checklist for the chosen account: new password (generated and
+  saved), sign out other devices, 2FA, recovery details, mail forwarding rules, accounts that depend on the mailbox,
+  bank and PESEL steps, reporting to CERT Polska. Progress is saved in the vault.
+- **Emergency card (PDF):** one printable page with where the vault is, what is needed to open it, an optional fresh
+  recovery code and a QR code to download KeyStead – for you or your family. The master password is never printed.
 
 ---
 

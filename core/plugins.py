@@ -58,6 +58,13 @@ PLUGINS: List[Plugin] = [
            N_("Przycisk „Link” przy haśle tworzy jednorazowy link dla kogoś spoza KeyStead. Treść jest szyfrowana "
               "w aplikacji – serwer firmy jej nie zna – i znika po pierwszym otwarciu. Wymaga sejfu na serwerze "
               "KeyStead (w sejfie lokalnym przycisk wyjaśni, dlaczego link nie działa).")),
+    Plugin("family_share", "👪", N_("Udostępnianie domownikom"),
+           N_("Wysyłasz wpis (np. hasło do Netflixa albo Wi-Fi) żonie, mężowi czy dzieciom – bez serwera i bez chmury. "
+              "Każdy daje Ci raz swoją wizytówkę, a paczkę z hasłem otworzy tylko KeyStead tej osoby. Ponowne wysłanie "
+              "aktualizuje hasło u odbiorcy.")),
+    Plugin("phone_handoff", "📱", N_("Hasło na telefon"),
+           N_("Przycisk „📱 Telefon” przy haśle pokazuje kod QR. Skanujesz go telefonem i hasło na chwilę pojawia się "
+              "w przeglądarce telefonu – przez domowe Wi-Fi, zaszyfrowane, bez instalowania aplikacji i bez chmury.")),
     Plugin("yubikey", "🔑", N_("Klucz YubiKey"),
            N_("Sejf otwiera się dopiero po podaniu hasła głównego i dotknięciu Twojego YubiKey (tryb "
               "challenge-response). Samo hasło – nawet wykradzione – nie wystarczy. Gdy zgubisz klucz, sejf "

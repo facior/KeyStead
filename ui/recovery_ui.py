@@ -98,6 +98,38 @@ class RecoveryCodeDialog(_Modal):
         self.destroy()
 
 
+class EmergencyCardDialog(_Modal):
+    """Opcje karty awaryjnej (PDF): nowy kod odzyskiwania na karcie, miejsce na ręczne wpisanie hasła głównego."""
+
+    def __init__(self, master, has_recovery: bool):
+        super().__init__(master, _("Karta awaryjna"), 560, 400)
+        ctk.CTkLabel(self, text=_("🖨 Karta awaryjna"), font=FONT_TITLE).pack(anchor="w", padx=20, pady=(16, 4))
+        ctk.CTkLabel(self, text=_("Jedna kartka A4 z tym, czego Ty lub bliscy potrzebujecie, żeby dostać się do sejfu: "
+                                  "gdzie jest sejf, co jest potrzebne do otwarcia i co zrobić po zapomnieniu hasła. "
+                                  "Wydrukuj ją i schowaj w bezpiecznym miejscu."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=510, justify="left").pack(anchor="w", padx=20)
+        self.new_code = ctk.BooleanVar(value=not has_recovery)
+        ctk.CTkCheckBox(self, text=_("Utwórz nowy kod odzyskiwania i umieść go na karcie"),
+                        variable=self.new_code).pack(anchor="w", padx=20, pady=(16, 2))
+        ctk.CTkLabel(self, text=(_("Dotychczasowy kod przestanie działać – zostanie ten z karty.") if has_recovery else
+                                 _("Sejf nie ma jeszcze kodu odzyskiwania – zalecamy go utworzyć.")),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=490, justify="left").pack(anchor="w", padx=48)
+        self.password_box = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(self, text=_("Dodaj pole na ręczne wpisanie hasła głównego"),
+                        variable=self.password_box).pack(anchor="w", padx=20, pady=(12, 2))
+        ctk.CTkLabel(self, text=_("KeyStead nigdy nie drukuje hasła głównego – możesz je dopisać długopisem."),
+                     font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=48)
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(20, 12), side="bottom")
+        ctk.CTkButton(row, text=_("Anuluj"), width=90, fg_color=COLOR_CARD_DARK, command=self.destroy).pack(side="right")
+        ctk.CTkButton(row, text=_("Zapisz PDF…"), width=130, fg_color=COLOR_PRIMARY,
+                      command=self._ok).pack(side="right", padx=8)
+
+    def _ok(self):
+        self.result = {"new_code": bool(self.new_code.get()), "password_box": bool(self.password_box.get())}
+        self.destroy()
+
+
 class PasswordPrompt(_Modal):
     """Pojedyncze pole z hasłem (np. potwierdzenie hasła głównego, hasło do klucza firmy) albo kod odzyskiwania."""
 
