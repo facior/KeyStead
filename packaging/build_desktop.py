@@ -10,6 +10,7 @@ Pliki NIE są tu podpisywane kluczem wydawcy – robi to tools/release_app.py na
 
 import os
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -73,8 +74,21 @@ def pyinstaller() -> str:
 def add_licenses(target_dir: str) -> None:
     for src, dst in LICENSES:
         shutil.copy2(os.path.join(ROOT, src), os.path.join(target_dir, dst))
+    notices = os.path.join(target_dir, "THIRD-PARTY-NOTICES.txt")
     run([sys.executable, os.path.join(ROOT, "packaging", "third_party_notices.py"), os.path.join(BUILD, "work", EXE_NAME),
-         os.path.join(target_dir, "THIRD-PARTY-NOTICES.txt")])
+         notices])
+    check_licenses(notices)
+
+
+def check_licenses(notices: str) -> None:
+    """Program ma licencję zastrzeżoną – biblioteki na licencjach GPL / LGPL / AGPL nie mogą do niego trafić."""
+    with open(notices, encoding="utf-8-sig") as f:
+        summary = f.read().split("\n" + "=" * 100 + "\n", 1)[0].splitlines()
+    listed = [line for line in summary if " – " in line]
+    print("Biblioteki w programie:\n  " + "\n  ".join(listed))
+    banned = [line for line in listed[1:] if re.search(r"\b(A|L)?GPL|General Public License", line)]
+    if banned:
+        fail("Biblioteki z licencją GPL/LGPL/AGPL: " + "; ".join(banned))
 
 
 def selftest(executable: str) -> None:
