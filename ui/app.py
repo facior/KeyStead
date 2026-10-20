@@ -36,6 +36,7 @@ from core.vault import Vault
 from ui.policy import (SCORE_LABELS, build_security_report, effective_auto_lock, min_master_score,
                        personal_backups_allowed)
 from backups import BackupManager, vault_snapshot, merge_runtime_state
+import tkinter as tk
 from tkinter import messagebox
 from sync import SyncSession, delete_profile
 from sync.session import REVOKED, SYNCED
@@ -185,7 +186,19 @@ class PasswordManagerApp(ctk.CTk):
     # ------------------------------------------------------------ ikona i aktualizacje
     @staticmethod
     def _set_icon(window):
-        if sys.platform != "win32" or not os.path.isfile(ICON_PATH):
+        if sys.platform != "win32":
+            # macOS / Linux: obraz PNG (w zbudowanym programie na Macu ikonę w Docku daje i tak paczka .app)
+            png = os.path.join(os.path.dirname(ICON_PATH), "keystead.png")
+            if os.path.isfile(png):
+                def _apply():
+                    try:
+                        window._ks_icon = tk.PhotoImage(master=window, file=png)
+                        window.iconphoto(True, window._ks_icon)
+                    except Exception:
+                        pass
+                window.after(250, lambda: window.winfo_exists() and _apply())
+            return
+        if not os.path.isfile(ICON_PATH):
             return
         try:
             import ctypes

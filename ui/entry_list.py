@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
-from ui.perf import SmoothScroller
+from ui.perf import SmoothScroller, wheel_notches
 from ui.theme import (COLOR_CARD_DARK, COLOR_CARD_HOVER, COLOR_PRIMARY, COLOR_TEXT_MUTED, COLOR_TEXT_PRIMARY,
                       FONT_FAMILY)
 
@@ -62,6 +62,8 @@ class EntryList(ctk.CTkFrame):
         self.canvas.bind("<Motion>", self._on_motion)
         self.canvas.bind("<Leave>", lambda e: self._set_hover(None))
         self.canvas.bind("<MouseWheel>", self._on_wheel)
+        self.canvas.bind("<Button-4>", self._on_wheel)  # Linux (X11)
+        self.canvas.bind("<Button-5>", self._on_wheel)
 
     # ------------------------------------------------------------ API
     def set_items(self, items: List[Dict[str, str]], empty_text: str = "", keep_scroll: bool = False) -> None:
@@ -225,7 +227,7 @@ class EntryList(ctk.CTkFrame):
 
     def _on_wheel(self, event) -> None:
         """Płynne przewijanie: każdy obrót kółka przesuwa cel, widok dojeżdża do niego w czasie rzeczywistym."""
-        self._scroller.scroll_by(-event.delta / 120 * self.row_h * 1.6)
+        self._scroller.scroll_by(-wheel_notches(event) * self.row_h * 1.6)
 
     def _stop_scroll_animation(self) -> None:
         self._scroller.stop()

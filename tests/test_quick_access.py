@@ -4,6 +4,7 @@ skróty klawiszowe i okienko wyszukiwania.
 """
 
 import os
+import sys
 import time
 import unittest
 from unittest import mock
@@ -210,6 +211,7 @@ def window_tree(page_fields=(), bar="https://www.mbank.pl/login", toolbar=True):
     return FakeNode(16, None, [FakeNode(16, None, [holder]), FakeNode(16, None, [document])])
 
 
+@unittest.skipUnless(sys.platform == "win32", "pasek adresu przez MSAA – tylko Windows")
 class TestMsaaAddressBar(unittest.TestCase):
     def setUp(self):
         p = mock.patch.object(browser_url, "_release", lambda obj: None)
@@ -334,6 +336,8 @@ class TestQuickSearchPopup(unittest.TestCase):
             bank = VaultEntry(title="mBank", username="jan", password="p", url="https://mbank.pl")
             confirmed = []
             w = AutotypeWarning(root, bank, "mbank-logowanie.xyz", on_confirm=lambda: confirmed.append(1))
+            root.update()
+            w.focus_force()  # Linux bez menedżera okien: klawisze trafiają tylko do okna z fokusem
             root.update()
             w.event_generate("<Return>")
             root.update()

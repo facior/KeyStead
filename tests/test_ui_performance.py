@@ -214,7 +214,9 @@ class TestMainViewSmoothness(unittest.TestCase):
         self.pump(0.05)
         midway = canvas.canvasy(0)
         self.pump(0.4)
-        self.assertGreater(canvas.canvasy(0), midway)  # animacja dojeżdża w kilku klatkach
+        limit = float(canvas.bbox("all")[3] - canvas.winfo_height())
+        if midway < limit:  # krótsza treść (inne czcionki systemu) może skończyć się już po pierwszych klatkach
+            self.assertGreater(canvas.canvasy(0), midway)  # animacja dojeżdża w kilku klatkach
         self.assertGreater(midway, 0)
         self.assertGreater(bar._start_value, 0)  # suwak nadąża za treścią
 

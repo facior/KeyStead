@@ -289,6 +289,7 @@ class PluginsUiTests(unittest.TestCase):
             time.sleep(0.02)
         return False
 
+    @unittest.skipUnless(os.name == "nt", "agent SSH poza Windows – etap 3 przenoszenia na macOS i Linuksa")
     def test_ssh_key_card_and_agent_lifecycle(self):
         from core.ssh_agent import pageant_request
         key_text = ssh_keys.generate_ed25519("admin@srv")

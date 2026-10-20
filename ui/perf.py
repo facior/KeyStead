@@ -10,7 +10,7 @@ Poprawki wydajności CustomTkinter (stosowane raz, przy starcie aplikacji).
    wywoływał dziesiątki procedur (także dla dawno zamkniętych paneli). Tutaj jest jedna wspólna obsługa,
    która przekazuje zdarzenie tylko do istniejących ramek.
 
-3. Płynne przewijanie. Na Windows ramka przeskakiwała o 20 px na każdy ząbek kółka; tutaj dojeżdża do celu
+3. Płynne przewijanie (każdy system, patrz wheel_notches). Na Windows ramka przeskakiwała o 20 px na każdy ząbek kółka; tutaj dojeżdża do celu
    w kilku klatkach – tak jak lista wpisów.
 """
 
@@ -87,8 +87,24 @@ def _patch_scrollable_frame() -> None:
         return None
 
     cls.bind_all = bind_all_shared
-    if sys.platform.startswith("win"):
-        cls._mouse_wheel_all = _smooth_wheel
+    cls._mouse_wheel_all = _smooth_wheel
+
+
+def wheel_notches(event) -> float:
+    """
+    Obrót kółka w „ząbkach” (dodatnio = w górę), jednakowo na każdym systemie:
+    Windows – delta 120 na ząbek; Linux (X11) – osobne zdarzenia Button-4/5; macOS – małe wartości
+    (gładzik wysyła wiele drobnych kroków, Tk 9 – wielokrotności 120).
+    """
+    num = getattr(event, "num", None)
+    if num == 4:
+        return 1.0
+    if num == 5:
+        return -1.0
+    delta = getattr(event, "delta", 0) or 0
+    if sys.platform == "darwin" and abs(delta) < 120:
+        return delta / 3.0
+    return delta / 120.0
 
 
 def _set_shift(pressed: bool) -> None:
@@ -120,7 +136,7 @@ def _smooth_wheel(self, event) -> None:
             return 0 if not region else (region[2] - region[0]) if h else (region[3] - region[1])
         scroller = SmoothScroller(canvas, total, horizontal=horizontal)
         setattr(self, key, scroller)
-    scroller.scroll_by(-event.delta / 120 * WHEEL_STEP_PX)
+    scroller.scroll_by(-wheel_notches(event) * WHEEL_STEP_PX)
 
 
 # --------------------------------------------------------------------- wspólne płynne przewijanie

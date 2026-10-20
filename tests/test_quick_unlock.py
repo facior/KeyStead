@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import shutil
 import tempfile
 import unittest
@@ -91,7 +92,8 @@ class TestQuickUnlock(unittest.TestCase):
 
     def test_target_ids(self):
         a = target_id("file", r"C:\Sejfy\Moj.vault")
-        self.assertEqual(a, target_id("file", r"c:\sejfy\moj.vault"))  # Windows: wielkość liter bez znaczenia
+        if sys.platform == "win32":
+            self.assertEqual(a, target_id("file", r"c:\sejfy\moj.vault"))  # Windows: wielkość liter bez znaczenia
         self.assertNotEqual(a, target_id("server", r"C:\Sejfy\Moj.vault"))
 
     def test_remove_all(self):

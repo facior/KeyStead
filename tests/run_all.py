@@ -3,6 +3,7 @@ Uruchamia wszystkie testy aplikacji (tests/test_*.py) – lokalnie i w GitHub Ac
 
     python tests/run_all.py              # wszystkie
     python tests/run_all.py --no-server  # bez testów wymagających kodu serwera (jak w repozytorium aplikacji)
+    python tests/run_all.py -v           # nazwa każdego testu (w GitHub Actions widać, przy którym coś padło)
 """
 
 import glob
@@ -27,7 +28,7 @@ def main() -> int:
                 continue
         names.append(f"tests.{name}")
     suite = unittest.defaultTestLoader.loadTestsFromNames(names)
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
+    result = unittest.TextTestRunner(verbosity=2 if "-v" in sys.argv else 1).run(suite)
     return 0 if result.wasSuccessful() else 1
 
 
