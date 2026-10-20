@@ -1,54 +1,17 @@
-"""Diagnostyka Tk na macOS: każdy scenariusz w osobnym procesie, wynik (ok / kod błędu) na wyjściu."""
+"""Diagnostyka Tk na macOS: który wcześniejszy moduł testów sprawia, że pierwszy test z oknem kończy się błędem."""
 
 import os
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TARGET = "tests.test_family_phone_ui"
+BEFORE = ["tests.test_app_update", "tests.test_audit", "tests.test_backup_hardening", "tests.test_backups",
+          "tests.test_crypto", "tests.test_crypto_v2", "tests.test_family_phone"]
 
-SCENARIOS = {
-    "ctk_offscreen": """
-import customtkinter as ctk, time
-r = ctk.CTk(); r.geometry("400x300+-4000+-4000")
-for _ in range(50): r.update(); time.sleep(0.01)
-r.destroy()
-""",
-    "mainview_onscreen": """
-import customtkinter as ctk, time, tempfile, os
-from core.vault import Vault, VaultEntry
-from ui.main_view import MainView
-r = ctk.CTk(); r.geometry("1300x850+20+20")
-v = Vault("x"); v.add_entry(VaultEntry("A", username="u", password="p"))
-m = MainView(r, v, "pw", os.path.join(tempfile.mkdtemp(), "v.vault")); m.pack(fill="both", expand=True)
-for _ in range(50): r.update(); time.sleep(0.01)
-r.destroy()
-""",
-    "mainview_offscreen": """
-import customtkinter as ctk, time, tempfile, os
-from core.vault import Vault, VaultEntry
-from ui.main_view import MainView
-r = ctk.CTk(); r.geometry("1300x850+-4000+-4000")
-v = Vault("x"); v.add_entry(VaultEntry("A", username="u", password="p"))
-m = MainView(r, v, "pw", os.path.join(tempfile.mkdtemp(), "v.vault")); m.pack(fill="both", expand=True)
-for _ in range(50): r.update(); time.sleep(0.01)
-r.destroy()
-""",
-    "two_roots_onscreen": """
-import customtkinter as ctk, time, tempfile, os
-from core.vault import Vault, VaultEntry
-from ui.main_view import MainView
-for i in range(2):
-    r = ctk.CTk(); r.geometry("1300x850+20+20")
-    v = Vault("x"); v.add_entry(VaultEntry("A", username="u", password="p"))
-    m = MainView(r, v, "pw", os.path.join(tempfile.mkdtemp(), "v.vault")); m.pack(fill="both", expand=True)
-    for _ in range(50): r.update(); time.sleep(0.01)
-    r.destroy()
-""",
-}
-
-for name, code in SCENARIOS.items():
-    proc = subprocess.run([sys.executable, "-X", "faulthandler", "-c", "import tests; " + code], cwd=ROOT,
-                          capture_output=True, text=True, timeout=120)
-    print(f"=== {name}: exit {proc.returncode}")
+for mods in [[TARGET]] + [[m, TARGET] for m in BEFORE]:
+    proc = subprocess.run([sys.executable, "-X", "faulthandler", "-m", "unittest", *mods], cwd=ROOT,
+                          capture_output=True, text=True, timeout=600)
+    print(f"=== {' + '.join(mods)}: exit {proc.returncode}")
     if proc.returncode:
-        print(proc.stderr[-3000:])
+        print("\n".join(line for line in proc.stderr.splitlines() if "File \"/Users" in line)[-2500:])
