@@ -13,13 +13,11 @@ from core.storage import background_saver, load_vault, save_vault
 from core.vault import Vault, VaultEntry
 from ui.theme import COLOR_PRIMARY
 
-try:
+from tests.gui import has_display
+
+HAS_DISPLAY = has_display()
+if HAS_DISPLAY:
     import customtkinter as ctk
-    _root_probe = ctk.CTk()
-    _root_probe.destroy()
-    HAS_DISPLAY = True
-except Exception:
-    HAS_DISPLAY = False
 
 PASSWORD = "haslo-testowe-123"
 

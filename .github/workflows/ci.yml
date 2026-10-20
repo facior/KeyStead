@@ -29,9 +29,6 @@ jobs:
       - name: Testy (Linux, wirtualny ekran)
         if: runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1920x1080x24" python -X faulthandler tests/run_all.py -v
-      - name: Diagnostyka Tk (macOS)
-        if: runner.os == 'macOS'
-        run: python .github/scripts/mac_probe.py
       - name: Testy
         if: runner.os != 'Linux'
         run: python -X faulthandler tests/run_all.py -v

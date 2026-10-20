@@ -20,13 +20,11 @@ from core.ssh_agent import AgentService
 from core.storage import background_saver, save_vault
 from core.vault import Vault, VaultEntry
 
-try:
+from tests.gui import has_display
+
+HAS_DISPLAY = has_display()
+if HAS_DISPLAY:
     import customtkinter as ctk
-    _probe = ctk.CTk()
-    _probe.destroy()
-    HAS_DISPLAY = True
-except Exception:
-    HAS_DISPLAY = False
 
 PASSWORD = "haslo-testowe-123"
 OFFSCREEN = "+-4000+-4000"
