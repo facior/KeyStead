@@ -2,6 +2,7 @@
 Główny punkt wejściowy aplikacji KeyStead Manager.
 
     KeyStead Manager.exe --selftest wynik.json   – diagnostyka (wersja, moduły, Windows Hello) bez okna
+    (macOS: "KeyStead Manager.app/Contents/MacOS/KeyStead Manager" --selftest wynik.json)
 """
 
 import sys
@@ -22,19 +23,26 @@ def selftest(out_path: str) -> int:
     import json
     from core.version import APP_VERSION
     result = {"version": APP_VERSION, "frozen": bool(getattr(sys, "frozen", False)), "modules": {}}
-    for name in ("customtkinter", "cryptography", "argon2", "importers.kdbx", "winrt.windows.security.credentials",
-                 "winrt.windows.security.cryptography", "core.quick_unlock", "ui.quick_access", "zxingcpp",
-                 "ui.plugin_dialogs", "ui.plugins_view", "core.ssh_agent", "ykman.hid", "yubikit.yubiotp"):
+    modules = ["customtkinter", "cryptography", "bcrypt", "argon2", "importers.kdbx", "core.quick_unlock",
+               "ui.quick_access", "zxingcpp", "ui.plugin_dialogs", "ui.plugins_view", "core.ssh_agent", "ykman.hid",
+               "yubikit.yubiotp"]
+    if sys.platform == "win32":
+        modules += ["winrt.windows.security.credentials", "winrt.windows.security.cryptography"]
+    else:
+        modules += ["keyring"]
+    for name in modules:
         try:
             __import__(name)
             result["modules"][name] = "ok"
         except Exception as e:
             result["modules"][name] = f"{type(e).__name__}: {e}"
-    try:
-        from core.quick_unlock import WindowsHelloProvider
-        result["windows_hello_available"] = WindowsHelloProvider().is_available()
-    except Exception as e:
-        result["windows_hello_available"] = f"{type(e).__name__}: {e}"
+    if sys.platform == "win32":
+        try:
+            from core.quick_unlock import WindowsHelloProvider
+            result["windows_hello_available"] = WindowsHelloProvider().is_available()
+        except Exception as e:
+            result["windows_hello_available"] = f"{type(e).__name__}: {e}"
+    result["platform"] = sys.platform
     try:
         from core.i18n import load_catalog
         result["translations_en"] = len(load_catalog("en"))  # pliki core/locales trafiły do programu

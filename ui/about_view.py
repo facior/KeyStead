@@ -28,9 +28,11 @@ COMPATIBILITY = {
 
 
 def program_file(name: str) -> str:
-    """Plik dołączony do zainstalowanego programu (obok KeyStead Manager.exe) albo "" (wersja deweloperska)."""
+    """Plik dołączony do zainstalowanego programu (obok KeyStead Manager.exe, na Macu w paczce .app) albo ""."""
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
+        if sys.platform == "darwin":  # paczka .app: Contents/MacOS/program, pliki w Contents/Resources
+            base = os.path.join(os.path.dirname(base), "Resources")
     else:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(base, name)

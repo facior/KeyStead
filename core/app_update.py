@@ -46,6 +46,8 @@ def asset_names(version: str) -> Dict[str, str]:
     return {
         "setup": f"KeyStead-Manager-Setup-{version}.exe",
         "portable": f"KeyStead-Manager-{version}-portable.zip",
+        "mac": f"KeyStead-Manager-{version}-macos-arm64.dmg",
+        "linux": f"KeyStead-Manager-{version}-x86_64.AppImage",
         "sums": "SHA256SUMS",
         "sig": "SHA256SUMS.sig",
     }
