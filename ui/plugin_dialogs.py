@@ -12,7 +12,7 @@ from core.i18n import N_, _, _n
 from core.totp_service import get_current_totp
 from core.vault import Vault, VaultEntry
 from ui.flat_button import FlatButton
-from ui.theme import (COLOR_CARD_DARK, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_TEXT_MUTED,
+from ui.theme import (FONT_FAMILY, FONT_MONO, COLOR_CARD_DARK, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_TEXT_MUTED,
                       COLOR_TEXT_PRIMARY, COLOR_WARNING, FONT_BODY, FONT_BODY_BOLD, FONT_SMALL, FONT_SUBTITLE)
 
 # Kolorowe hasło: cyfry i znaki specjalne wyróżnione (wtyczka „Kolorowe hasło”)
@@ -147,7 +147,7 @@ class PickCharsDialog(_Dialog):
         self.numbers_entry.pack(side="left", padx=6)
         self.numbers_entry.bind("<KeyRelease>", self._typed)
 
-        self.result_lbl = ctk.CTkLabel(body, text="", font=("Consolas", 22, "bold"), text_color=COLOR_SUCCESS)
+        self.result_lbl = ctk.CTkLabel(body, text="", font=(FONT_MONO, 22, "bold"), text_color=COLOR_SUCCESS)
         self.result_lbl.pack(anchor="w", pady=(10, 0))
         self.detail_lbl = ctk.CTkLabel(body, text="", font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, justify="left")
         self.detail_lbl.pack(anchor="w")
@@ -468,7 +468,7 @@ class FloatingPanel(ctk.CTkToplevel):
         row = tk.Frame(self.list_frame, bg=COLOR_CARD_DARK)
         row.pack(fill="x", pady=2, padx=2)
         title = tk.Label(row, text=entry.title, bg=COLOR_CARD_DARK, fg=COLOR_TEXT_PRIMARY, anchor="w",
-                         font=("Segoe UI", 10, "bold"), cursor="hand2")
+                         font=(FONT_FAMILY, 10, "bold"), cursor="hand2")
         title.pack(side="top", fill="x", padx=8, pady=(4, 0))
         title.bind("<Button-1>", lambda e, eid=entry.id: self.on_select(eid))
         acts = tk.Frame(row, bg=COLOR_CARD_DARK)

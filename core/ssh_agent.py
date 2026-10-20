@@ -143,24 +143,36 @@ class _TokenUser(ctypes.Structure):
 class _CurrentUser:
     """SID bieżącego konta (bufor trzymany przez cały czas działania programu)."""
     _buffer = None
+    _owner_buffer = None
     _sid_string = ""
+
+    @staticmethod
+    def _token_info(info_class: int):
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+            raise OSError(ctypes.get_last_error(), "OpenProcessToken")
+        try:
+            size = wintypes.DWORD()
+            advapi32.GetTokenInformation(token, info_class, None, 0, ctypes.byref(size))
+            buf = ctypes.create_string_buffer(size.value)
+            if not advapi32.GetTokenInformation(token, info_class, buf, size, ctypes.byref(size)):
+                raise OSError(ctypes.get_last_error(), "GetTokenInformation")
+        finally:
+            kernel32.CloseHandle(token)
+        return buf
 
     @classmethod
     def sid(cls):
         if cls._buffer is None:
-            token = wintypes.HANDLE()
-            if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
-                raise OSError(ctypes.get_last_error(), "OpenProcessToken")
-            try:
-                size = wintypes.DWORD()
-                advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))  # TokenUser
-                buf = ctypes.create_string_buffer(size.value)
-                if not advapi32.GetTokenInformation(token, 1, buf, size, ctypes.byref(size)):
-                    raise OSError(ctypes.get_last_error(), "GetTokenInformation")
-            finally:
-                kernel32.CloseHandle(token)
-            cls._buffer = buf
+            cls._buffer = cls._token_info(1)  # TokenUser
         return ctypes.cast(cls._buffer, ctypes.POINTER(_TokenUser)).contents.Sid
+
+    @classmethod
+    def default_owner_sid(cls):
+        """Domyślny właściciel nowych obiektów – w procesie z uprawnieniami administratora to grupa Administratorzy."""
+        if cls._owner_buffer is None:
+            cls._owner_buffer = cls._token_info(4)  # TokenOwner
+        return ctypes.cast(cls._owner_buffer, ctypes.POINTER(ctypes.c_void_p)).contents
 
     @classmethod
     def sid_string(cls) -> str:
@@ -316,7 +328,8 @@ READ_CONTROL = 0x00020000
 SE_KERNEL_OBJECT = 6
 OWNER_SECURITY_INFORMATION = 1
 
-WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+_FUNCTYPE = ctypes.WINFUNCTYPE if os.name == "nt" else ctypes.CFUNCTYPE  # poza Windows tylko, by moduł się wczytał
+WNDPROC = _FUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 
 class _CopyData(ctypes.Structure):
@@ -410,7 +423,9 @@ class PageantWindow:
                                         None, None, None, ctypes.byref(sd)) != 0:
                 return 0
             try:
-                if not advapi32.EqualSid(owner, _CurrentUser.sid()):
+                # Jak w Pageancie z PuTTY: konto użytkownika albo domyślny właściciel obiektów tego procesu
+                if not (advapi32.EqualSid(owner, _CurrentUser.sid())
+                        or advapi32.EqualSid(owner, _CurrentUser.default_owner_sid())):
                     return 0
             finally:
                 kernel32.LocalFree(sd)

@@ -1,5 +1,7 @@
 customtkinter>=6.0.0
 cryptography>=44.0.0
+# Klucze SSH zabezpieczone hasłem (format OpenSSH, bcrypt-pbkdf) – wtyczka agenta SSH
+bcrypt>=4.0
 argon2-cffi>=23.1.0
 pyotp>=2.9.0
 requests>=2.31.0
@@ -16,3 +18,5 @@ winrt-Windows.Security.Credentials>=3.2.1; sys_platform == "win32"
 winrt-Windows.Security.Credentials.UI>=3.2.1; sys_platform == "win32"
 winrt-Windows.Security.Cryptography>=3.2.1; sys_platform == "win32"
 winrt-Windows.Storage.Streams>=3.2.1; sys_platform == "win32"
+# macOS / Linux: token serwera w pęku kluczy systemu (Keychain / Secret Service)
+keyring>=25.0; sys_platform != "win32"

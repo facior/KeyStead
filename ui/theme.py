@@ -5,6 +5,8 @@ Inspirowane nowoczesnymi interfejsami aplikacji takich jak 1Password, Raycast i 
 
 import customtkinter as ctk
 
+from core.desktop import mono_font_family, ui_font_family
+
 # Ustawienia bazowe CustomTkinter
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -38,12 +40,13 @@ COLOR_TEXT_PRIMARY = "#f8fafc"    # Jasny, czytelny biały (Slate 50)
 COLOR_TEXT_MUTED = "#94a3b8"      # Stonowany tekst pomocniczy (Slate 400)
 COLOR_TEXT_ACCENT = "#38bdf8"     # Jasny błękit wyróżnień (Sky 400)
 
-FONT_FAMILY = "Segoe UI"
+FONT_FAMILY = ui_font_family()
+FONT_MONO = mono_font_family()
 FONT_TITLE_HERO = (FONT_FAMILY, 24, "bold")
 FONT_TITLE = (FONT_FAMILY, 19, "bold")
 FONT_SUBTITLE = (FONT_FAMILY, 14, "bold")
 FONT_BODY = (FONT_FAMILY, 13)
 FONT_BODY_BOLD = (FONT_FAMILY, 13, "bold")
-FONT_CODE = ("Consolas", 13)
+FONT_CODE = (FONT_MONO, 13)
 FONT_SMALL = (FONT_FAMILY, 11)
-FONT_TOTP = ("Consolas", 23, "bold")
+FONT_TOTP = (FONT_MONO, 23, "bold")

@@ -2,7 +2,9 @@
 Ochrona drobnych sekretów zapisywanych poza sejfem (np. token urządzenia do serwera synchronizacji).
 
 Windows: DPAPI (CryptProtectData) – dane da się odszyfrować tylko na tym koncie Windows na tym komputerze.
-Inne systemy: zapis w pliku z uprawnieniami tylko dla właściciela (oznaczony prefiksem "plain:").
+macOS: pęk kluczy użytkownika (Keychain). Linux: magazyn haseł pulpitu (Secret Service – GNOME Keyring, KWallet).
+W pliku zostaje wtedy tylko odnośnik „keyring:<nazwa>”.
+Gdy systemowego magazynu nie ma (np. Linux bez pulpitu): zapis w pliku z prefiksem "plain:".
 """
 
 import base64
@@ -11,7 +13,9 @@ import sys
 from core.i18n import _
 
 _DPAPI_PREFIX = "dpapi:"
+_KEYRING_PREFIX = "keyring:"
 _PLAIN_PREFIX = "plain:"
+KEYRING_SERVICE = "KeyStead Manager"
 
 
 def _dpapi(data: bytes, protect: bool) -> bytes:
@@ -48,11 +52,31 @@ def _dpapi(data: bytes, protect: bool) -> bytes:
         kernel32.LocalFree(blob_out.pbData)
 
 
-def protect_secret(value: str) -> str:
+def _keyring():
+    """Systemowy magazyn haseł albo None (brak biblioteki lub działającego magazynu)."""
+    try:
+        import keyring
+        from keyring.backends import fail
+        backend = keyring.get_keyring()
+        if isinstance(backend, fail.Keyring) or getattr(backend, "priority", 0) <= 0:
+            return None
+        return keyring
+    except Exception:
+        return None
+
+
+def protect_secret(value: str, name: str = "device-token") -> str:
     if not value:
         return ""
     if sys.platform == "win32":
         return _DPAPI_PREFIX + base64.b64encode(_dpapi(value.encode("utf-8"), True)).decode("ascii")
+    kr = _keyring()
+    if kr is not None:
+        try:
+            kr.set_password(KEYRING_SERVICE, name, value)
+            return _KEYRING_PREFIX + name
+        except Exception:
+            pass
     return _PLAIN_PREFIX + value
 
 
@@ -61,6 +85,28 @@ def unprotect_secret(stored: str) -> str:
         return ""
     if stored.startswith(_DPAPI_PREFIX):
         return _dpapi(base64.b64decode(stored[len(_DPAPI_PREFIX):]), False).decode("utf-8")
+    if stored.startswith(_KEYRING_PREFIX):
+        kr = _keyring()
+        value = None
+        if kr is not None:
+            try:
+                value = kr.get_password(KEYRING_SERVICE, stored[len(_KEYRING_PREFIX):])
+            except Exception:
+                value = None
+        if value is None:
+            raise OSError(_("Brak sekretu w systemowym pęku kluczy"))
+        return value
     if stored.startswith(_PLAIN_PREFIX):
         return stored[len(_PLAIN_PREFIX):]
     return stored
+
+
+def forget_secret(stored: str) -> None:
+    """Usuwa sekret z systemowego pęku kluczy (dla DPAPI i "plain:" nie ma czego usuwać)."""
+    if stored and stored.startswith(_KEYRING_PREFIX):
+        kr = _keyring()
+        if kr is not None:
+            try:
+                kr.delete_password(KEYRING_SERVICE, stored[len(_KEYRING_PREFIX):])
+            except Exception:
+                pass

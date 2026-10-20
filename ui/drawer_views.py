@@ -34,7 +34,7 @@ from importers import (
 from importers.base import tidy_vault, untidy_entries
 from core.i18n import LANGUAGES, N_, _, _n, current_language, save_language
 from core.version import APP_VERSION
-from ui.theme import (
+from ui.theme import (FONT_FAMILY, FONT_MONO, 
     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_CODE, FONT_SMALL,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT, COLOR_CARD_DARK, COLOR_CARD_HOVER,
     COLOR_PANEL_DARK, COLOR_BORDER, COLOR_SUCCESS, COLOR_DANGER, COLOR_WARNING,
@@ -629,7 +629,7 @@ class GeneratorDrawerView(ctk.CTkFrame):
         out_frame = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)
         out_frame.pack(fill="x", pady=(0, 15), ipady=6)
 
-        self.pwd_entry = ctk.CTkEntry(out_frame, font=("Consolas", 15, "bold"), justify="center", fg_color="transparent", border_width=0)
+        self.pwd_entry = ctk.CTkEntry(out_frame, font=(FONT_MONO, 15, "bold"), justify="center", fg_color="transparent", border_width=0)
         self.pwd_entry.pack(fill="x", padx=10, pady=(6, 4))
 
         self.s_bar = ctk.CTkProgressBar(out_frame, height=6)
@@ -748,7 +748,7 @@ class AuditDrawerView(ctk.CTkFrame):
         inner = layout_frame(self.score_card)
         inner.pack(fill="x", padx=15, pady=8)
 
-        self.score_lbl = ctk.CTkLabel(inner, text="--", font=("Segoe UI", 32, "bold"), text_color=COLOR_SUCCESS)
+        self.score_lbl = ctk.CTkLabel(inner, text="--", font=(FONT_FAMILY, 32, "bold"), text_color=COLOR_SUCCESS)
         self.score_lbl.pack(side="left", padx=(0, 12))
 
         col = layout_frame(inner)
@@ -820,7 +820,7 @@ class AuditDrawerView(ctk.CTkFrame):
             if report.total_entries == 0:
                 ctk.CTkLabel(card, text=_("Sejf jest pusty – dodaj wpisy, aby przeprowadzić audyt."), font=FONT_SUBTITLE, text_color=COLOR_TEXT_MUTED).pack(pady=4)
                 return
-            ctk.CTkLabel(card, text="🎉", font=("Segoe UI", 36)).pack()
+            ctk.CTkLabel(card, text="🎉", font=(FONT_FAMILY, 36)).pack()
             ctk.CTkLabel(card, text=_("Brak zagrożeń w Twoim sejfie!"), font=FONT_SUBTITLE, text_color=COLOR_SUCCESS).pack(pady=4)
             ctk.CTkLabel(card, text=_("Wszystkie hasła są silne, unikalne i bezpieczne."), font=FONT_SMALL, text_color=COLOR_TEXT_MUTED).pack()
             return

@@ -1,5 +1,5 @@
 """
-Zapamiętany profil serwera (adres + token urządzenia chroniony DPAPI) w ~/.keystead/config.json.
+Zapamiętany profil serwera (adres + token urządzenia chroniony DPAPI lub pękiem kluczy systemu) w ~/.keystead/config.json.
 """
 
 import json
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from core.paths import CACHE_DIR, CONFIG_FILE, ensure_app_dir
-from core.secret_store import protect_secret, unprotect_secret
+from core.secret_store import forget_secret, protect_secret, unprotect_secret
 
 
 @dataclass
@@ -71,5 +71,7 @@ def save_profile(profile: ServerProfile) -> None:
 
 def delete_profile() -> None:
     data = _read()
-    data.pop("sync_server", None)
+    old = data.pop("sync_server", None)
     _write(data)
+    if isinstance(old, dict):
+        forget_secret(old.get("token", ""))

@@ -55,6 +55,7 @@
  "Błędne hasło główne lub uszkodzona baza KeePass: {error}": "Wrong master password or damaged KeePass database: {error}",
  "Certyfikat HTTPS serwera nie jest zaufany ({error}).": "The server's HTTPS certificate is not trusted ({error}).",
  "DPAPI: operacja nie powiodła się": "DPAPI: the operation failed",
+ "Brak sekretu w systemowym pęku kluczy": "The secret is missing from the system keychain",
  "Dla tego konta nie skonfigurowano jednorazowych kodów dwuskładnikowych.": "One-time two-factor codes are not configured for this account.",
  "Do otwarcia bazy KeePass (.kdbx) wymagane jest hasło lub plik klucza.": "A password or keyfile is required to open a KeePass database (.kdbx).",
  "Dobry (Zalecane drobne poprawki)": "Good (Minor improvements recommended)",

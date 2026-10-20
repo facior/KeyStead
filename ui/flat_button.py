@@ -15,6 +15,8 @@ import customtkinter as ctk
 from customtkinter.windows.widgets.scaling import ScalingTracker
 from PIL import Image, ImageDraw, ImageTk
 
+from core.desktop import ui_font_family
+
 
 
 def _root_cache(master, name: str) -> dict:
@@ -83,7 +85,7 @@ class FlatButton(tk.Label):
                  fg_color=None, hover_color=None, text_color="#ffffff", font=None, corner_radius: int = 6,
                  command: Optional[Callable[[], None]] = None, **_ignored):
         scaling = ScalingTracker.get_widget_scaling(master)
-        family, size, *style = font or ("Segoe UI", 13)
+        family, size, *style = font or (ui_font_family(), 13)
         key = (family, size, tuple(style), scaling)
         fonts = _root_cache(master, "_ks_flat_fonts")
         tk_font = fonts.get(key)

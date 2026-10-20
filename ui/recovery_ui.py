@@ -17,7 +17,7 @@ from tkinter import filedialog, messagebox
 from core.crypto import (CryptoError, generate_org_keypair, load_org_private_key, seal, unseal_with_org_key)
 from core.i18n import N_, _, _n
 from core.generator import check_master_password, evaluate_password_strength, generate_password
-from ui.theme import (COLOR_CARD_DARK, COLOR_DANGER, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_TEXT_MUTED,
+from ui.theme import (FONT_MONO, COLOR_CARD_DARK, COLOR_DANGER, COLOR_PANEL_DARK, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_TEXT_MUTED,
                       COLOR_TEXT_PRIMARY, FONT_BODY, FONT_SMALL, FONT_SUBTITLE, FONT_TITLE)
 
 FORCE_CHANGE_KEY = "force_password_change"
@@ -57,7 +57,7 @@ class RecoveryCodeDialog(_Modal):
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=510, justify="left").pack(anchor="w", padx=20)
         box = ctk.CTkFrame(self, fg_color=COLOR_PANEL_DARK, corner_radius=10)
         box.pack(fill="x", padx=20, pady=14)
-        ctk.CTkLabel(box, text=code, font=("Consolas", 20, "bold"), text_color=COLOR_SUCCESS).pack(pady=14)
+        ctk.CTkLabel(box, text=code, font=(FONT_MONO, 20, "bold"), text_color=COLOR_SUCCESS).pack(pady=14)
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=20)
         ctk.CTkButton(row, text=_("Kopiuj"), width=90, fg_color=COLOR_CARD_DARK, command=self._copy).pack(side="left")
@@ -202,7 +202,7 @@ class AdminRecoveryTools(ctk.CTkFrame):
                      font=FONT_SMALL, text_color=COLOR_TEXT_MUTED, wraplength=470, justify="left").pack(anchor="w", padx=15)
         ctk.CTkButton(c1, text=_("Utwórz klucz odzyskiwania firmy…"), fg_color=COLOR_PRIMARY,
                       command=self._create_key).pack(anchor="w", padx=15, pady=10)
-        self.pub_box = ctk.CTkTextbox(c1, height=70, font=("Consolas", 12))
+        self.pub_box = ctk.CTkTextbox(c1, height=70, font=(FONT_MONO, 12))
         self.pub_info = ctk.CTkLabel(c1, text="", font=FONT_SMALL, text_color=COLOR_SUCCESS, wraplength=470, justify="left")
 
         c2 = ctk.CTkFrame(scroll, fg_color=COLOR_CARD_DARK, corner_radius=10)

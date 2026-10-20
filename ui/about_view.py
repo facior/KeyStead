@@ -11,6 +11,7 @@ from typing import Optional
 
 import customtkinter as ctk
 
+from core.desktop import open_path
 from core.i18n import N_, _, _n, current_language
 from core.version import (APP_NAME, APP_REPOSITORY_URL, APP_VERSION, AUTHOR, AUTHOR_GITHUB,
                           SERVER_REPOSITORY_URL, product_line, server_compatibility)
@@ -99,7 +100,7 @@ class AboutView(ctk.CTkFrame):
                            (_("Licencje użytych bibliotek"), program_file("THIRD-PARTY-NOTICES.txt"))):
             if path:
                 ctk.CTkButton(files, text=text, height=26, font=FONT_SMALL, fg_color=COLOR_PANEL_DARK,
-                              hover_color=COLOR_PRIMARY, command=lambda p=path: os.startfile(p)).pack(side="left", padx=(0, 6))
+                              hover_color=COLOR_PRIMARY, command=lambda p=path: open_path(p)).pack(side="left", padx=(0, 6))
 
     @staticmethod
     def _card(parent) -> ctk.CTkFrame:

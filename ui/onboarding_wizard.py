@@ -15,7 +15,7 @@ from core.vault import Vault, VaultEntry
 from core.storage import save_vault
 from core.generator import evaluate_password_strength, generate_passphrase, check_master_password
 from importers import run_import
-from ui.theme import (
+from ui.theme import (FONT_FAMILY, 
     FONT_TITLE_HERO, FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_SMALL,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_CARD_DARK, COLOR_CARD_HOVER,
     COLOR_PANEL_DARK, COLOR_BORDER, COLOR_SUCCESS, COLOR_SUCCESS_HOVER, COLOR_DANGER, COLOR_WARNING,
@@ -218,7 +218,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         container.pack(fill="both", expand=True, padx=30, pady=25)
 
         # Hero Banner
-        ctk.CTkLabel(container, text="🛡️", font=("Segoe UI", 48)).pack(pady=(10, 5))
+        ctk.CTkLabel(container, text="🛡️", font=(FONT_FAMILY, 48)).pack(pady=(10, 5))
         ctk.CTkLabel(container, text=_("Witaj w KeyStead Manager!"), font=FONT_TITLE_HERO, text_color=COLOR_TEXT_PRIMARY).pack(pady=(0, 4))
         ctk.CTkLabel(
             container,
@@ -240,7 +240,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         for icon, title, desc in feat_list:
             row = ctk.CTkFrame(features_box, fg_color="transparent")
             row.pack(fill="x", padx=15, pady=8)
-            ctk.CTkLabel(row, text=icon, font=("Segoe UI", 24)).pack(side="left", padx=(0, 12))
+            ctk.CTkLabel(row, text=icon, font=(FONT_FAMILY, 24)).pack(side="left", padx=(0, 12))
             text_col = ctk.CTkFrame(row, fg_color="transparent")
             text_col.pack(side="left", fill="x", expand=True)
             ctk.CTkLabel(text_col, text=title, font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
@@ -479,7 +479,7 @@ class OnboardingWizard(ctk.CTkToplevel):
         container = ctk.CTkScrollableFrame(self.step_content_frame, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=30, pady=25)
 
-        ctk.CTkLabel(container, text="🎉", font=("Segoe UI", 48)).pack(pady=(10, 5))
+        ctk.CTkLabel(container, text="🎉", font=(FONT_FAMILY, 48)).pack(pady=(10, 5))
         ctk.CTkLabel(container, text=_("Gratulacje! Twój sejf jest gotowy."), font=FONT_TITLE_HERO, text_color=COLOR_SUCCESS).pack(pady=(0, 4))
         ctk.CTkLabel(
             container,

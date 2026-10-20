@@ -21,13 +21,14 @@ from core.attachments import (DEFAULT_MAX_MB as DEFAULT_ATTACHMENT_MB, decrypt_a
                               write_temp_copy)
 
 from core.vault import Vault, VaultEntry, DEFAULT_CATEGORIES
+from core.desktop import open_path
 from core.i18n import _, _n
 from core.crypto import seal
 from core.storage import background_saver
 from core.totp_service import get_current_totp, get_totp_remaining_seconds
 from core.generator import evaluate_password_strength
 from core.security_audit import check_password_breach_hibp
-from ui.theme import (
+from ui.theme import (FONT_FAMILY, FONT_MONO, 
     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_CODE, FONT_SMALL, FONT_TOTP,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT, COLOR_CARD_DARK, COLOR_CARD_HOVER, COLOR_PANEL_DARK,
     COLOR_SUCCESS, COLOR_DANGER, COLOR_WARNING, COLOR_BORDER, COLOR_TEXT_PRIMARY,
@@ -450,7 +451,7 @@ class MainView(ctk.CTkFrame):
                 return
             path = write_temp_copy(meta, data)
             try:
-                os.startfile(path)  # domyślny program dla tego typu pliku
+                open_path(path)  # domyślny program dla tego typu pliku
             except (AttributeError, OSError) as e:
                 self.show_toast(_("Nie można otworzyć pliku: {error}", error=e), error=True)
                 return
@@ -510,7 +511,7 @@ class MainView(ctk.CTkFrame):
             text="☰",
             width=36,
             height=36,
-            font=("Segoe UI", 16, "bold"),
+            font=(FONT_FAMILY, 16, "bold"),
             fg_color=COLOR_CARD_DARK,
             hover_color=COLOR_CARD_HOVER,
             command=self._toggle_sidebar_manually
@@ -1023,7 +1024,7 @@ class MainView(ctk.CTkFrame):
                 c.pack(fill="x", pady=4)
                 r = ctk.CTkFrame(c, fg_color="transparent")
                 r.pack(fill="x", padx=12, pady=10)
-                ctk.CTkLabel(r, text=icon, font=("Segoe UI", 22)).pack(side="left", padx=(0, 10))
+                ctk.CTkLabel(r, text=icon, font=(FONT_FAMILY, 22)).pack(side="left", padx=(0, 10))
                 col = ctk.CTkFrame(r, fg_color="transparent")
                 col.pack(side="left", fill="x", expand=True)
                 ctk.CTkLabel(col, text=title, font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(anchor="w")
@@ -1032,7 +1033,7 @@ class MainView(ctk.CTkFrame):
         else:
             empty_box = ctk.CTkFrame(self.details_scroll, fg_color="transparent")
             empty_box.pack(fill="both", expand=True, pady=140)
-            ctk.CTkLabel(empty_box, text="🔐", font=("Segoe UI", 48)).pack(pady=(0, 10))
+            ctk.CTkLabel(empty_box, text="🔐", font=(FONT_FAMILY, 48)).pack(pady=(0, 10))
             ctk.CTkLabel(empty_box, text=_("Wybierz wpis z listy po lewej stronie,"), font=FONT_SUBTITLE, text_color=COLOR_TEXT_PRIMARY).pack()
             ctk.CTkLabel(empty_box, text=_("aby wyświetlić jego hasło, kod 2FA i szczegóły."), font=FONT_BODY, text_color=COLOR_TEXT_MUTED).pack(pady=(4, 20))
             ctk.CTkButton(empty_box, text=_("+ Utwórz nowy wpis"), fg_color=COLOR_PRIMARY, command=self._open_new_entry_dialog).pack()
@@ -1042,7 +1043,7 @@ class MainView(ctk.CTkFrame):
             w.destroy()
         box = ctk.CTkFrame(self.details_scroll, fg_color="transparent")
         box.pack(fill="both", expand=True, pady=120)
-        ctk.CTkLabel(box, text="🗑️", font=("Segoe UI", 48)).pack(pady=(0, 10))
+        ctk.CTkLabel(box, text="🗑️", font=(FONT_FAMILY, 48)).pack(pady=(0, 10))
         ctk.CTkLabel(box, text=_("Kosz (Usunięte elementy)"), font=FONT_TITLE, text_color=COLOR_TEXT_PRIMARY).pack()
         ctk.CTkLabel(box, text=_("Elementy w koszu można przywrócić lub trwale usunąć."), font=FONT_BODY, text_color=COLOR_TEXT_MUTED).pack(pady=(4, 15))
 
@@ -1290,7 +1291,7 @@ class MainView(ctk.CTkFrame):
             p_b.pack(fill="x", padx=12, pady=(2, 6))
             pwd_holder = self._plain_frame(p_b)
             pwd_holder.pack(side="left")
-            self.pwd_display_lbl = ctk.CTkLabel(pwd_holder, text="", font=("Consolas", 18, "bold"), text_color=COLOR_TEXT_PRIMARY)
+            self.pwd_display_lbl = ctk.CTkLabel(pwd_holder, text="", font=(FONT_MONO, 18, "bold"), text_color=COLOR_TEXT_PRIMARY)
             self.pwd_display_lbl.pack(side="left")
             self.pwd_color_txt = None
             if self.plugin_on("colored_password"):
@@ -1517,7 +1518,7 @@ class MainView(ctk.CTkFrame):
         self._label(top_r, text="💳 CHIP", font=FONT_CODE, text_color="#cbd5e1").pack(side="left")
         self._label(top_r, text="VIRTUAL CARD", font=FONT_BODY_BOLD, text_color=COLOR_PRIMARY_LIGHT).pack(side="right")
 
-        num_lbl = self._label(card_box, font=("Consolas", 17, "bold"), text_color="#f8fafc", anchor="w")
+        num_lbl = self._label(card_box, font=(FONT_MONO, 17, "bold"), text_color="#f8fafc", anchor="w")
         num_lbl.pack(anchor="w", padx=20, pady=(6, 8))
 
         # Dolny wiersz karty: Właściciel, Ważność, CVV
@@ -1575,7 +1576,7 @@ class MainView(ctk.CTkFrame):
         if colored is not None:
             colored.pack_forget()
         label.configure(text=password if self._password_revealed else "•" * min(len(password), 24),
-                        font=FONT_CODE if self._password_revealed else ("Consolas", 18, "bold"))
+                        font=FONT_CODE if self._password_revealed else (FONT_MONO, 18, "bold"))
         if not label.winfo_manager():
             label.pack(side="left")
 

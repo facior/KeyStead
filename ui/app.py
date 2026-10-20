@@ -19,6 +19,7 @@ from typing import Optional
 import customtkinter as ctk
 
 from core import app_update, yubikey
+from core.desktop import open_path
 from core.generator import evaluate_password_strength
 from core.i18n import N_, _, _n
 from core.version import APP_VERSION, server_compatibility
@@ -801,7 +802,7 @@ class PasswordManagerApp(ctk.CTk):
             return
         view.show_toast(_("🖨 Karta awaryjna zapisana – wydrukuj ją i schowaj w bezpiecznym miejscu"))
         try:
-            os.startfile(path)
+            open_path(path)
         except OSError:
             pass
 

@@ -14,7 +14,7 @@ import tkinter as tk
 from typing import Optional, Callable
 import customtkinter as ctk
 
-from ui.theme import (
+from ui.theme import (FONT_FAMILY, 
     FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_SMALL,
     COLOR_PANEL_DARK, COLOR_CARD_DARK, COLOR_CARD_HOVER, COLOR_BORDER,
     COLOR_PRIMARY, COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED
@@ -81,7 +81,7 @@ class SlidingDrawer:
             text="✕",
             width=36,
             height=36,
-            font=("Segoe UI", 16, "bold"),
+            font=(FONT_FAMILY, 16, "bold"),
             fg_color=COLOR_PANEL_DARK,
             hover_color=COLOR_CARD_HOVER,
             corner_radius=18,

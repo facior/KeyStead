@@ -9,7 +9,7 @@ from typing import Optional
 import customtkinter as ctk
 
 from core.i18n import N_, _, _n
-from ui.theme import (COLOR_CARD_DARK, COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_TEXT_MUTED, FONT_BODY, FONT_BODY_BOLD,
+from ui.theme import (FONT_MONO, COLOR_CARD_DARK, COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_TEXT_MUTED, FONT_BODY, FONT_BODY_BOLD,
                       FONT_SMALL, FONT_SUBTITLE)
 
 
@@ -25,7 +25,7 @@ class TotpDialog(ctk.CTkToplevel):
         self.body.pack(fill="both", expand=True, padx=22, pady=18)
 
     def _code_row(self):
-        self.code_entry = ctk.CTkEntry(self.body, placeholder_text="000000", font=("Consolas", 18, "bold"),
+        self.code_entry = ctk.CTkEntry(self.body, placeholder_text="000000", font=(FONT_MONO, 18, "bold"),
                                        justify="center", width=180)
         self.code_entry.pack(pady=(4, 10))
         self.code_entry.bind("<Return>", lambda e: self._ok())
@@ -73,7 +73,7 @@ class TotpDialog(ctk.CTkToplevel):
                    "3. Wpisz 6-cyfrowy kod, który pokaże aplikacja."),
             font=FONT_BODY, wraplength=420, justify="left").pack(anchor="w", pady=(4, 8))
         ctk.CTkLabel(dlg.body, text=_("Klucz:"), font=FONT_BODY_BOLD).pack(anchor="w")
-        key = ctk.CTkEntry(dlg.body, width=420, font=("Consolas", 14))
+        key = ctk.CTkEntry(dlg.body, width=420, font=(FONT_MONO, 14))
         key.insert(0, " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)))
         key.configure(state="readonly")
         key.pack(pady=(2, 6))

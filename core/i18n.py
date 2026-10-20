@@ -33,15 +33,29 @@ _catalog: Dict[str, Union[str, list]] = {}
 
 
 def system_language() -> str:
-    """Język Windows: polski → 'pl', każdy inny → 'en'."""
+    """Język systemu: polski → 'pl', każdy inny → 'en'."""
     if sys.platform == "win32":
         try:
             import ctypes
             return "pl" if ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF == 0x15 else "en"
         except Exception:
             pass
-    lang = (os.environ.get("LANG") or "").lower()
-    return "pl" if lang.startswith("pl") else "en"
+    if sys.platform == "darwin":
+        # Program uruchomiony z Findera nie dostaje zmiennej LANG – język interfejsu macOS jest w ustawieniach
+        try:
+            import subprocess
+            out = subprocess.run(["defaults", "read", "-g", "AppleLanguages"], capture_output=True, text=True,
+                                 timeout=3).stdout
+            first = out.replace("(", "").replace('"', "").strip().split(",")[0].strip().lower()
+            if first:
+                return "pl" if first.startswith("pl") else "en"
+        except Exception:
+            pass
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        lang = (os.environ.get(var) or "").lower()
+        if lang:
+            return "pl" if lang.startswith("pl") else "en"
+    return "en"
 
 
 def saved_language() -> Optional[str]:
