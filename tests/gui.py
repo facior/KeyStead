@@ -16,3 +16,9 @@ def has_display() -> bool:
     if sys.platform.startswith("linux"):
         return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     return True
+
+
+def require_screen_width(test, root, width: int = 1300) -> None:
+    """Pomija test układu, gdy ekran jest węższy niż okno testu (np. maszyna macOS w GitHub Actions: 1024 px)."""
+    if root.winfo_screenwidth() < width:
+        test.skipTest(f"ekran {root.winfo_screenwidth()} px – układ okna sprawdzany od {width} px")

@@ -20,7 +20,7 @@ from core.ssh_agent import AgentService
 from core.storage import background_saver, save_vault
 from core.vault import Vault, VaultEntry
 
-from tests.gui import has_display
+from tests.gui import has_display, require_screen_width
 
 HAS_DISPLAY = has_display()
 if HAS_DISPLAY:
@@ -395,6 +395,7 @@ class PluginsUiTests(unittest.TestCase):
         d.destroy()
 
     def test_link_button_in_local_vault(self):
+        require_screen_width(self, self.root)
         self.view._select_entry(self.plain.id)
         self.pump()
         self.assertIn("✉ Link", self.details_texts())  # widoczny także w sejfie lokalnym…

@@ -14,12 +14,13 @@ import os
 import secrets
 import socket
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Callable, Optional
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
 
 from core.i18n import _
+from core.local_http import LocalThreadingHTTPServer
 
 LIFETIME_SECONDS = 60
 MAX_BAD_REQUESTS = 20
@@ -69,7 +70,7 @@ class HandoffServer:
         self._bad = 0
         self._lock = threading.Lock()
         self._closed = False
-        self._server = ThreadingHTTPServer((self.host, 0), self._handler())
+        self._server = LocalThreadingHTTPServer((self.host, 0), self._handler())
         self._server.daemon_threads = True
         self.port = self._server.server_address[1]
         self._timer = threading.Timer(lifetime, lambda: self.close("timeout"))

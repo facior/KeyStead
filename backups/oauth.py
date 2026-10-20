@@ -22,13 +22,14 @@ import secrets
 import threading
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
 from core.i18n import _, current_language
+from core.local_http import LocalHTTPServer
 from core.paths import CONFIG_FILE  # noqa: E402
 REDIRECT_PORT = 53682
 LOGIN_TIMEOUT_SECONDS = 300
@@ -166,7 +167,7 @@ def _wait_for_redirect(host: str, expected_state: str, cancel_event: threading.E
 
     bind_host = "127.0.0.1" if host in ("localhost", "127.0.0.1") else host
     try:
-        server = HTTPServer((bind_host, REDIRECT_PORT), Handler)
+        server = LocalHTTPServer((bind_host, REDIRECT_PORT), Handler)
     except OSError as e:
         raise OAuthError(_("Port {port} jest zajęty – zamknij inne okno logowania i spróbuj ponownie. ({error})", port=REDIRECT_PORT, error=e))
 

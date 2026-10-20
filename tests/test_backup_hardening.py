@@ -29,7 +29,13 @@ class TestOAuthCallback(unittest.TestCase):
                 box["error"] = e
         t = threading.Thread(target=target, daemon=True)
         t.start()
-        time.sleep(0.4)
+        deadline = time.time() + 5
+        while time.time() < deadline:  # czekamy, aż serwer zacznie przyjmować połączenia
+            try:
+                socket.create_connection(("127.0.0.1", oauth.REDIRECT_PORT), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.05)
         return t, cancel, box
 
     def _get(self, query):

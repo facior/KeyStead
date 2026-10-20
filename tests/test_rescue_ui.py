@@ -15,7 +15,7 @@ from core.storage import background_saver, save_vault
 from core.vault import Vault
 from tests.test_rescue import home_vault
 
-from tests.gui import has_display
+from tests.gui import has_display, require_screen_width
 
 HAS_DISPLAY = has_display()
 if HAS_DISPLAY:
@@ -86,6 +86,7 @@ class RescueUiTests(unittest.TestCase):
         return find(self.root, RescueDrawerView)[0]
 
     def test_toolbar_button_and_domino_map(self):
+        require_screen_width(self, self.root)
         self.assertIn("🚨 Ratunek", texts(self.view.actions_box))
         rv = self.open_center()
         shown = texts(rv)

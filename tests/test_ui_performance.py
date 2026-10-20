@@ -13,7 +13,7 @@ from core.storage import background_saver, load_vault, save_vault
 from core.vault import Vault, VaultEntry
 from ui.theme import COLOR_PRIMARY
 
-from tests.gui import has_display
+from tests.gui import has_display, require_screen_width
 
 HAS_DISPLAY = has_display()
 if HAS_DISPLAY:
@@ -263,6 +263,7 @@ class TestMainViewSmoothness(unittest.TestCase):
         win.destroy()
 
     def test_flat_button_click_and_window_breakpoints(self):
+        require_screen_width(self, self.root)
         from ui.flat_button import FlatButton
         clicked = []
         btn = FlatButton(self.view.details_scroll, text="✏️ Edytuj", width=75, command=lambda: clicked.append(1))
