@@ -37,7 +37,7 @@ r.destroy()
 """
 
 for name, choices in VARIANTS.items():
-    proc = subprocess.run([sys.executable, "-X", "faulthandler", "-c", "import tests\n" + CODE.replace("{CHOICES}", choices)],
+    proc = subprocess.run([sys.executable, "-X", "faulthandler", "-c", "import tests\n" + CODE.replace("CHOICES", choices)],
                           cwd=ROOT, capture_output=True, text=True, timeout=120)
     print(f"=== {name}: exit {proc.returncode} {proc.stdout.strip()[-300:]}")
     if proc.returncode:
